@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">NyaEdit</title>
+  <desc id="description">A black paw print on a white notebook with three binding rings, redrawn from the supplied reference.</desc>
+  <rect width="1024" height="1024" rx="180" fill="#fff"/>
+  <g transform="translate(-102 -92) scale(.98)">
+    <!-- Notebook cover and inset page. -->
+    <path fill="#111" d="M358 261H900C955 261 1000 309 1000 367V936C1000 1002 951 1053 887 1053H367C303 1053 252 1001 252 935V368C252 309 300 261 358 261Z"/>
+    <path fill="#fff" d="M359 318H893C926 318 950 345 950 378V932C950 977 923 1010 879 1010H378C331 1010 301 978 301 930V379C301 344 324 318 359 318Z"/>
+    <!-- Three rounded binding rings with open white centers. -->
+    <g fill="#111">
+      <rect x="388" y="181" width="94" height="197" rx="47"/>
+      <rect x="578" y="181" width="96" height="197" rx="48"/>
+      <rect x="768" y="181" width="96" height="197" rx="48"/>
+    </g>
+    <g fill="#fff">
+      <rect x="425" y="221" width="20" height="125" rx="10"/>
+      <rect x="616" y="221" width="20" height="125" rx="10"/>
+      <rect x="806" y="221" width="20" height="125" rx="10"/>
+      <!-- The side pads overlap and interrupt the notebook outline. -->
+      <ellipse cx="365" cy="705" rx="109" ry="132" transform="rotate(-30 365 705)"/>
+      <ellipse cx="886" cy="704" rx="108" ry="134" transform="rotate(32 886 704)"/>
+    </g>
+    <!-- Four toe pads and one curved central pad. -->
+    <g fill="#111">
+      <ellipse cx="511" cy="539" rx="83" ry="119" transform="rotate(-12 511 539)"/>
+      <ellipse cx="734" cy="539" rx="83" ry="121" transform="rotate(17 734 539)"/>
+      <ellipse cx="365" cy="705" rx="81" ry="104" transform="rotate(-30 365 705)"/>
+      <ellipse cx="886" cy="704" rx="80" ry="106" transform="rotate(32 886 704)"/>
+      <path d="M626 677C678 677 711 705 737 750C757 785 789 804 815 835C848 874 844 927 812 956C790 982 758 979 728 965C686 945 657 932 626 932C595 932 566 945 524 965C494 979 462 982 440 956C408 927 404 874 437 835C463 804 495 785 515 750C541 705 574 677 626 677Z"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NyaEdit
+Comment=Lightweight native text editor
+Comment[zh_CN]=轻量原生文本编辑器
+Exec=NyaEdit %F
+Icon=nyaedit
+Terminal=false
+Categories=Utility;TextEditor;Development;
+MimeType=text/plain;text/x-c;text/x-c++;application/json;
+StartupNotify=true

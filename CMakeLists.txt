@@ -1,0 +1,113 @@
+cmake_minimum_required(VERSION 3.21)
+project(NyaEdit VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Concurrent)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Concurrent Svg)
+find_package(ICU 60 REQUIRED COMPONENTS uc i18n)
+
+add_library(nya_core STATIC
+    src/core/AppStorage.cpp src/core/AppStorage.h
+    src/core/Encoding.cpp src/core/Encoding.h
+    src/core/FileIO.cpp src/core/FileIO.h
+    src/core/FileSearch.cpp src/core/FileSearch.h
+    src/core/Search.cpp src/core/Search.h)
+target_include_directories(nya_core PUBLIC src/core)
+target_link_libraries(nya_core PUBLIC Qt${QT_VERSION_MAJOR}::Core ICU::uc ICU::i18n)
+
+add_library(nya_widgets STATIC
+    assets/icons.qrc
+    src/ui/Animation.cpp src/ui/Animation.h
+    src/ui/AnimationSettingsDialog.cpp src/ui/AnimationSettingsDialog.h
+    src/ui/Editor.cpp src/ui/Editor.h
+    src/ui/FileTreeView.cpp src/ui/FileTreeView.h
+    src/ui/FontSettingsDialog.cpp src/ui/FontSettingsDialog.h
+    src/ui/Highlighter.cpp src/ui/Highlighter.h
+    src/ui/MainWindow.cpp src/ui/MainWindow.h
+    src/ui/WelcomePage.cpp src/ui/WelcomePage.h
+    src/ui/Theme.cpp src/ui/Theme.h)
+target_include_directories(nya_widgets PUBLIC src/ui)
+target_link_libraries(nya_widgets PUBLIC nya_core Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg)
+
+add_executable(NyaEdit MACOSX_BUNDLE WIN32 src/main.cpp)
+target_link_libraries(NyaEdit PRIVATE nya_widgets)
+set_target_properties(NyaEdit PROPERTIES
+    MACOSX_BUNDLE_BUNDLE_NAME NyaEdit
+    MACOSX_BUNDLE_GUI_IDENTIFIER dev.nyaedit.editor
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+    WIN32_EXECUTABLE TRUE)
+if(APPLE)
+    set_source_files_properties(assets/logo.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(NyaEdit PRIVATE assets/logo.icns)
+    set_target_properties(NyaEdit PROPERTIES MACOSX_BUNDLE_ICON_FILE logo.icns)
+elseif(WIN32)
+    enable_language(RC)
+    configure_file(packaging/nyaedit.rc.in ${CMAKE_CURRENT_BINARY_DIR}/nyaedit.rc @ONLY)
+    target_sources(NyaEdit PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/nyaedit.rc)
+endif()
+if(MSVC)
+    target_compile_options(nya_core PRIVATE /W4 /utf-8)
+    target_compile_options(nya_widgets PRIVATE /W4 /utf-8)
+    target_compile_options(NyaEdit PRIVATE /utf-8)
+else()
+    target_compile_options(nya_core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(nya_widgets PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
+    add_executable(nya_tests tests/CoreTests.cpp)
+    target_link_libraries(nya_tests PRIVATE nya_core Qt${QT_VERSION_MAJOR}::Test)
+    add_executable(nya_ui_tests tests/WidgetTests.cpp)
+    target_link_libraries(nya_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
+    add_executable(nya_storage_tests tests/StorageTests.cpp)
+    target_link_libraries(nya_storage_tests PRIVATE nya_core Qt${QT_VERSION_MAJOR}::Test)
+    if(MSVC)
+        target_compile_options(nya_tests PRIVATE /utf-8)
+        target_compile_options(nya_ui_tests PRIVATE /utf-8)
+        target_compile_options(nya_storage_tests PRIVATE /utf-8)
+    endif()
+    add_test(NAME nya_tests COMMAND nya_tests)
+    add_test(NAME nya_ui_tests COMMAND nya_ui_tests -platform offscreen)
+    add_test(NAME nya_storage_tests COMMAND nya_storage_tests)
+    set_tests_properties(nya_tests nya_ui_tests nya_storage_tests PROPERTIES TIMEOUT 90)
+endif()
+
+option(NYA_BUILD_TOOLS "Build preview and performance measurement tools" OFF)
+if(NYA_BUILD_TOOLS)
+    add_executable(nya_preview tools/Preview.cpp)
+    target_link_libraries(nya_preview PRIVATE nya_widgets)
+    add_executable(nya_benchmark tools/Benchmark.cpp)
+    target_link_libraries(nya_benchmark PRIVATE nya_widgets)
+    if(APPLE)
+        enable_language(OBJC)
+        add_executable(nya_set_file_icon tools/SetFileIcon.m)
+        set_target_properties(nya_set_file_icon PROPERTIES AUTOMOC OFF AUTORCC OFF)
+        target_compile_options(nya_set_file_icon PRIVATE -fobjc-arc)
+        target_link_libraries(nya_set_file_icon PRIVATE "-framework AppKit")
+        add_custom_target(nya_refresh_file_icons
+            COMMAND $<TARGET_FILE:nya_set_file_icon> ${PROJECT_SOURCE_DIR}/assets/logo.icns
+                $<TARGET_FILE:NyaEdit> $<TARGET_BUNDLE_DIR:NyaEdit>
+            DEPENDS NyaEdit nya_set_file_icon
+            COMMENT "Updating local Finder icons for NyaEdit"
+            VERBATIM)
+    endif()
+    if(MSVC)
+        target_compile_options(nya_preview PRIVATE /utf-8)
+        target_compile_options(nya_benchmark PRIVATE /utf-8)
+    endif()
+endif()
+
+include(GNUInstallDirs)
+install(TARGETS NyaEdit BUNDLE DESTINATION . RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(UNIX AND NOT APPLE)
+    install(FILES packaging/nyaedit.desktop DESTINATION share/applications)
+    install(FILES assets/logo.svg DESTINATION share/icons/hicolor/scalable/apps RENAME nyaedit.svg)
+endif()

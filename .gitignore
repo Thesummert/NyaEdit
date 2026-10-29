@@ -1,0 +1,63 @@
+# CMake build, packaging, and preview output
+/build*/
+/cmake-build-*/
+/out/
+/dist/
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/CTestTestfile.cmake
+/DartConfiguration.tcl
+/Testing/
+/install_manifest.txt
+/Makefile
+/build.ninja
+/build.ninja.d
+/rules.ninja
+/.ninja_deps
+/.ninja_log
+CMakeUserPresets.json
+*_autogen/
+*.moc
+
+# Compiled objects, libraries, applications, and debug symbols
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.dSYM/
+*.app/
+*.dmg
+
+# Local editor settings, caches, and temporary files
+/.cache/
+/.idea/
+/.vscode/
+*.user
+*.user.*
+*.swp
+*.swo
+*~
+*.log
+
+# Local environment and runtime settings
+.env
+.env.*
+!.env.example
+!.env.sample
+/editor.ini
+/system.ini
+/history.json
+
+# Operating-system metadata
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini

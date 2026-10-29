@@ -1,0 +1,185 @@
+# NyaEdit
+
+一个使用 **C++17 + Qt Widgets + ICU** 编写的原生文本编辑器。支持 Windows、macOS 和 Linux，界面与核心库分离，不引入浏览器运行时。
+
+![NyaEdit 深色主题](docs/images/dark.png)
+
+[查看浅色主题](docs/images/light.png) · [文件夹搜索预览](docs/images/file-search.png) · [欢迎页预览](docs/images/welcome.png) · [字体设置预览](docs/images/font-settings.png)
+
+应用 Logo 根据提供的“活页本＋猫爪”图片重绘，矢量源文件为 [assets/logo.svg](assets/logo.svg)，参考原图保留在 `assets/logo.png`。Logo 通过 Qt 资源内嵌，用于工具栏和应用图标，不依赖运行时工作目录。macOS 的 `assets/logo.icns` 与 Windows 的 `assets/logo.ico` 同样由此 SVG 导出。
+
+## 功能
+
+- 多标签页、可拖动标签、文件夹侧栏、拖放文件。
+- 文件树中的文件 / 文件夹、顶部标签和文档列表支持右键在系统文件管理器中打开或定位。
+- 启动欢迎页可新建文档、打开文件或文件夹、选择最近打开的文件与文件夹；最多保存 30 条历史。
+- 编辑器偏好与历史记录存入系统对应的用户目录；设置菜单支持一键清空历史，预留独立系统配置文件和接口。
+- 文件夹内递归搜索文件名 / 相对路径，默认模糊匹配，右键搜索框可关闭；后台执行，支持键盘打开与 Ctrl/⌘+P 快速聚焦。
+- 深色 / 浅色主题、行号、当前行高亮、自定义字体与字号、字体预览和缩放、自动换行。
+- 可调速的侧栏收放、文件树展开 / 收起、搜索面板和页面切换动画；可独立开关光标平滑移动 / 闪烁与选区渐变，深浅主题均使用高对比选区。
+- BOM / 严格 UTF-8 检查 + ICU 编码推测，并显示检测置信度。
+- 手动指定打开编码、按另一编码重新打开、转换保存编码；支持 UTF-8、UTF-16/32、GB18030（兼容 GBK）、Big5、Shift_JIS、EUC-JP/KR、Windows-1251/1252、Latin-1。
+- Unicode 编码可选择是否写入 BOM；保留原文件的编码、BOM 和 LF / CRLF / CR 换行方式。
+- 查找、替换、全部替换，支持大小写、全词、跨行正则表达式与捕获组替换。
+- 撤销 / 重做、自动缩进、多行缩进、行号跳转、基础语法着色。
+- 原子保存、未保存提示、不可表示字符检查、磁盘文件变更检测。
+- 在后台线程读取和解码文件；只绘制可见行号与可见搜索高亮，文件树按需加载。
+
+## 架构
+
+```text
+src/
+├── core/                 # 后端：Qt Core + ICU，不依赖 Widgets
+│   ├── Encoding.*        # 编码检测、严格解码、严格编码
+│   ├── FileIO.*          # 文件加载、换行分析、原子保存
+│   ├── FileSearch.*      # 可取消的递归文件名 / 路径搜索
+│   ├── AppStorage.*      # 跨平台配置、预留系统配置、文件与文件夹历史
+│   └── Search.*          # Unicode 搜索、正则捕获、替换
+├── ui/                   # 前端：Qt Widgets
+│   ├── Editor.*          # 文本视图、行号、输入、可见区高亮
+│   ├── FileTreeView.*    # 文件树节点展开 / 收起的可调速过渡
+│   ├── Animation*        # 面板 / 页面过渡、动画偏好与设置对话框
+│   ├── FontSettingsDialog.* # 字体、字号选择与实时预览
+│   ├── Highlighter.*     # 基础语法着色
+│   ├── MainWindow.*      # 窗口、标签、搜索面板、交互调度
+│   ├── WelcomePage.*     # 启动入口、最近文件与文件夹
+│   └── Theme.*           # 主题和矢量绘制图标
+└── main.cpp
+```
+
+`nya_core` 和 `nya_widgets` 分别构建为独立静态库。UI 调用核心的普通数据接口，核心不会打开对话框或访问窗口。文件加载通过 `QtConcurrent` 调度，结果通过 `QFutureWatcher` 送回 UI。核心测试可以在没有 GUI 的环境下单独运行。详见 [架构说明](docs/architecture.md)。
+
+## 构建
+
+需要 CMake ≥ 3.21、C++17 编译器、Qt ≥ 5.15（推荐 Qt 6）和 ICU ≥ 60。Qt 需要 **Widgets、Concurrent、Svg**，启用测试时还需要 **Test**。无需 Qt WebEngine 或 Qt Core5Compat。
+
+### macOS
+
+```sh
+brew install cmake ninja qt icu4c
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix icu4c)"
+cmake --build build --parallel
+open build/NyaEdit.app
+```
+
+### Ubuntu / Debian
+
+```sh
+sudo apt install build-essential cmake ninja-build qt6-base-dev libqt6svg6-dev libicu-dev
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+./build/NyaEdit
+```
+
+### Windows
+
+使用 Visual Studio 2022 的开发者 PowerShell，安装相同架构的 Qt 和 ICU。可通过 vcpkg 获取依赖：
+
+```powershell
+vcpkg install qtbase:x64-windows qtsvg:x64-windows icu:x64-windows
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build --parallel
+.\build\NyaEdit.exe
+```
+
+将示例中的 vcpkg 路径替换为你的安装路径。若使用 Qt 官方安装包，通过 `-DCMAKE_PREFIX_PATH="Qt安装目录;ICU安装目录"` 指定依赖。编译器、Qt、ICU 和目标架构必须匹配。
+
+### 测试
+
+默认启用测试，可用 `-DBUILD_TESTING=OFF` 关闭。
+
+```sh
+ctest --test-dir build --output-on-failure
+./build/nya_tests                        # 仅核心测试，无需桌面
+./build/nya_storage_tests                # 配置与历史持久化测试，无需桌面
+./build/nya_ui_tests -platform offscreen  # 界面集成测试
+```
+
+测试覆盖 Unicode/BOM 和中日韩传统编码往返、GB18030 检测、无效字节与不可表示字符拒绝、保存失败时原文件保留、换行保留、Unicode 搜索偏移、正则与零宽匹配、替换上限、撤销、异步打开、重复文件去重、未保存保护和加载期间关闭标签；文件夹搜索覆盖嵌套目录、隐藏文件、中文与路径匹配、结果上限、取消、目录符号链接、切换文件夹、键盘打开和清空搜索。存储和欢迎页测试覆盖配置重启恢复、文件与文件夹历史、去重及数量上限、旧配置迁移、损坏文件保护、写入失败和加载期间清空历史。
+
+本项目已在当前 macOS ARM64 环境用 Qt 5.15.2 / ICU 73.1 实际构建。Windows、Linux 和 Qt 6 构建尚需在对应环境验证。
+
+### 开发工具
+
+```sh
+cmake -S . -B build -DNYA_BUILD_TOOLS=ON
+cmake --build build --parallel
+./build/nya_preview -platform offscreen build/previews  # 生成欢迎页与深浅主题截图
+./build/nya_benchmark -platform offscreen              # 临时文件性能测量
+```
+
+预览工具还会导出 Logo PNG、多尺寸 `logo.ico`、`logo.icns` 和 `NyaEdit.iconset`。修改 SVG 后重新运行预览工具，并将生成的 ICO / ICNS 更新到 `assets/` 即可同步系统图标。
+
+macOS 的应用包使用内置 ICNS；底层 Mach-O 文件在 Finder 中的单独图标使用文件元数据。启用 `NYA_BUILD_TOOLS` 后，运行 `cmake --build build --target nya_refresh_file_icons` 可为本地 `.app` 和内部可执行文件设置 / 刷新 Finder 图标。此本地图标元数据可能随复制方式丢失；分发时使用完整 `.app` 应用包。
+
+本机 Release 实测：约 9.3 MB UTF-8 / 15 万行文本，读取、检测、解码及换行归一化约 **131 ms**，15 万处全部替换约 **104 ms**，Qt 文档填充约 **790 ms**。这些为单次本机测量，不包含对话框和磁盘缓存变化，不能作为其他设备的性能保证。
+
+## 使用
+
+不指定文件启动时进入欢迎页，双击最近记录或选中后按回车，即可重新打开对应文件或文件夹。关闭最后一个标签页后返回欢迎页，也可通过“视图 → 欢迎页”随时进入；已打开的文档仍保留在侧栏。
+
+打开文件夹后，该文件夹及子目录内的文件不再单独加入最近文件历史，文件夹本身仍记录；文件夹外单独打开的文件正常记录。判断以发起打开时的文件夹为准，加载期间切换文件夹不会改变此次记录规则。已有历史记录继续保留。
+
+通过文件菜单、拖放或命令行打开文件：
+
+```sh
+./build/NyaEdit notes.txt src/main.cpp
+# macOS：
+./build/NyaEdit.app/Contents/MacOS/NyaEdit notes.txt
+```
+
+右下角的**编码**按钮提供两类操作：
+
+- **按另一编码重新打开**：从磁盘重新读取原始字节并解码，用于纠正乱码。存在未保存修改时会询问是否保存。
+- **转换保存编码**：保持当前文字，调整保存时使用的编码；点击保存后写入磁盘。无法表示当前字符的编码会被拒绝。
+
+右下角 **LF / CRLF / CR** 可调整保存换行。混合换行文件会在保存前询问是否统一。
+
+打开文件夹后，在左侧搜索框输入文件名或相对路径，即可递归搜索所有子文件夹；不区分大小写，支持中文和隐藏文件。默认开启模糊搜索，输入字符按顺序匹配、允许中间有间隔，例如 `mw` 可找到 `MainWindow.cpp`，`文配` 可找到 `文件配置.txt`。右键搜索框，取消勾选“模糊搜索”可恢复连续片段匹配；搜索框下方显示当前模式与右键操作提示，选择会保存到编辑器配置。
+
+结果按相对路径排序，以区分同名文件。双击结果或按回车打开，搜索框内按 ↓ / ↑ 可进入结果列表，Esc 或清除按钮恢复文件树。Ctrl/⌘+P（或“搜索 → 搜索文件…”）可快速聚焦搜索框，尚未打开文件夹时会先弹出文件夹选择器。
+
+文件搜索在后台执行，输入变化和切换文件夹时取消旧任务，最多显示 1000 个匹配并提示缩小搜索范围。默认跳过 `.git`、`.hg`、`.svn` 目录，不递归跟随目录符号链接。该功能搜索文件名与路径，文档正文查找仍使用 Ctrl/⌘+F。
+
+右键文件树中的文件或文件夹、文件夹标题、顶部标签、已打开文档列表或文件搜索结果，可在系统文件管理器中查看对应项目。macOS 为“在 Finder 中显示”，Windows 为“在文件资源管理器中显示”，会定位并选中该项目；Linux 打开文件所在目录，文件夹则打开自身。菜单操作以右键点击的项目为准；未保存文档及已不存在的路径会禁用此操作。
+
+“设置 → 字体与字号…”可选择已安装的系统字体，输入 **6–96 pt** 字号，并实时预览中英文及代码。确认后应用到所有已打开文档，后续新建、打开及重启后继续使用该设置。支持恢复默认；取消不会修改编辑器。字体只影响编辑区和行号。
+
+“设置 → 动画设置…”可分别开关窗口界面动画、光标动画和选择区域动画，并设置 **0.25–3 ×** 速度，数值越大动画越快。默认全部开启、速度 1 ×；确认后应用于所有文档，新文档与重启后沿用设置。光标移动与选区渐变只影响显示，输入、复制和搜索立即生效；关闭选区动画后仍保留高对比选区颜色。
+
+“视图”菜单的放大 / 缩小、Ctrl+滚轮可调整当前文档字号，保留所选字体，并保存为新文档的默认字号；状态栏字号按钮可恢复到 13 pt。
+
+“设置 → 清除历史记录”立即清空文件、文件夹历史和上次打开目录，并保留主题、字体、自动换行及窗口偏好。“设置 → 打开配置目录”可查看 `editor.ini` 和预留的 `system.ini`；历史记录独立保存为 `history.json`。具体路径、文件格式和扩展接口见 [配置与历史存储](docs/configuration.md)。
+
+| 操作 | Windows / Linux | macOS |
+| --- | --- | --- |
+| 新建 / 打开 / 保存 | Ctrl+N / O / S | ⌘N / O / S |
+| 查找 | Ctrl+F | ⌘F |
+| 搜索文件夹中的文件 | Ctrl+P | ⌘P |
+| 替换 | 使用搜索菜单中的平台快捷键 | 使用搜索菜单中的平台快捷键 |
+| 跳转到行 | Ctrl+L | ⌘L |
+| 侧边栏 | Ctrl+B | ⌘B |
+| 关闭标签 | Ctrl+W | ⌘W |
+| 撤销 / 重做 | 平台标准快捷键 | 平台标准快捷键 |
+| 缩进 / 取消缩进 | Tab / Shift+Tab | Tab / Shift+Tab |
+| 关闭搜索面板 | Esc | Esc |
+
+正则使用 PCRE2 语法，默认开启多行锚点；跨行内容可用 `\n` 或 `(?s)`。替换支持 `$1`、`${name}` 和 `$$`（字面量 `$`）。普通文本替换不会展开捕获组。全部替换可以一次撤销。
+
+## 性能范围与限制
+
+- 适用于常规文本、配置、代码和中等大小日志；使用 Qt 文档模型在内存中编辑，当前不是面向 GB 级文件的分块编辑器。
+- 单文件打开上限 **128 MiB**；大于 **16 MiB** 提示确认；大于 **2 MiB** 关闭语法着色；单行超过 12000 字符不着色。载入文档布局、保存及搜索目前仍在主线程执行，较大文件可能短暂阻塞界面。
+- 搜索导航保留前 **20000** 个匹配；全部替换处理整个文档。复杂正则的执行时间取决于表达式和输入内容。
+- 无 BOM 的传统编码只能推测，短文本或混合语言可能误判。检测置信度只表示启发式判断，不保证正确，可手动指定编码。
+- 混合换行保存时会统一；U+2028/U+2029 分隔符文件目前拒绝打开，以避免 Qt 文档模型隐式转换造成损失。不支持二进制文件编辑。
+- 语法着色是基础功能，不包含 LSP、补全、代码执行或完整语言解析。
+- 暂无崩溃恢复 / 自动备份；正常关闭时会询问是否保存。
+
+## 发布
+
+`cmake --install build --prefix dist` 可安装应用。Linux 会同时安装 desktop 文件和 SVG 图标。分发给未安装 Qt 的机器前，需要部署动态依赖：macOS 使用 `macdeployqt`，Windows 使用 `windeployqt` 并包含 ICU DLL，Linux 使用发行包或 AppImage 等方式。正式分发还需按平台签名 / 公证，并遵守 Qt 与 ICU 的许可证。当前源码构建产物不等于已签名、可独立分发的安装包。
+
+参考：[Qt 原子保存](https://doc.qt.io/qt-6/qsavefile.html)、[ICU 编码检测及其局限](https://unicode-org.github.io/icu/userguide/conversion/detection)、[ICU 严格转换](https://unicode-org.github.io/icu/userguide/conversion/converters.html)。

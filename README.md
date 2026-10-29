@@ -72,6 +72,18 @@ cmake --build build --parallel
 ./build/NyaEdit
 ```
 
+### Arch Linux
+
+```sh
+sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-svg icu
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/NyaEdit
+```
+
+可用 `cmake --install build --prefix dist` 将程序、desktop 文件和图标安装到项目内的 `dist/` 目录；程序入口为 `dist/bin/NyaEdit`，运行时需要系统已安装 Qt 6 和 ICU。
+
 ### Windows
 
 使用 Visual Studio 2022 的开发者 PowerShell，安装相同架构的 Qt 和 ICU。可通过 vcpkg 获取依赖：
@@ -99,7 +111,7 @@ ctest --test-dir build --output-on-failure
 
 测试覆盖 Unicode/BOM 和中日韩传统编码往返、GB18030 检测、无效字节与不可表示字符拒绝、保存失败时原文件保留、换行保留、Unicode 搜索偏移、正则与零宽匹配、替换上限、撤销、异步打开、重复文件去重、未保存保护和加载期间关闭标签；文件夹搜索覆盖嵌套目录、隐藏文件、中文与路径匹配、结果上限、取消、目录符号链接、切换文件夹、键盘打开和清空搜索。存储和欢迎页测试覆盖配置重启恢复、文件与文件夹历史、去重及数量上限、旧配置迁移、损坏文件保护、写入失败和加载期间清空历史。
 
-本项目已在当前 macOS ARM64 环境用 Qt 5.15.2 / ICU 73.1 实际构建。Windows、Linux 和 Qt 6 构建尚需在对应环境验证。
+本项目已在 macOS ARM64 环境用 Qt 5.15.2 / ICU 73.1，以及 Arch Linux x86_64 环境用 GCC 16.2.1 / Qt 6.12.0 / ICU 78.3 实际构建。Windows 构建尚需在对应环境验证。
 
 ### 开发工具
 

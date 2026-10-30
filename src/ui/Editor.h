@@ -5,6 +5,10 @@
 #include "TreeSitter.h"
 #include <QPlainTextEdit>
 #include <QPointer>
+#include <QJsonValue>
+#include <QJsonObject>
+
+class QListWidget;
 
 namespace nya {
 class Highlighter;
@@ -46,11 +50,19 @@ public:
     QFont editorFont() const { return m_editorFont; }
     void setAnimationSettings(const AnimationSettings &settings);
     AnimationSettings animationSettings() const { return m_animationSettings; }
+    void requestCompletion() { emit completionRequested(false); }
+    void requestDefinition() { emit definitionRequested(); }
+    bool showCompletions(const QJsonValue &result);
+    void hideCompletions();
+    int lspOffset(const QJsonObject &position) const;
 signals:
     void languageStatusChanged(const QString &status);
     void zoomChanged();
     void editorFontChanged();
+    void completionRequested(bool automatic);
+    void definitionRequested();
 protected:
+    bool event(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -59,7 +71,13 @@ protected:
     void focusOutEvent(QFocusEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void inputMethodEvent(QInputMethodEvent *event) override;
 private:
+    void acceptCompletion();
+    bool handleCompletionKey(QKeyEvent *event);
+    void updateCompletionBackdrop();
     void updateAnimatedCursor(bool animate);
     void restartCursorBlink();
     void animateSelection();
@@ -83,5 +101,8 @@ private:
     QRectF m_paintedCursor;
     QRectF m_targetCursor;
     qreal m_cursorOpacity = 1.0;
+    QListWidget *m_completions = nullptr;
+    QString m_completionText;
+    int m_completionPosition = -1;
 };
 }

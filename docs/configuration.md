@@ -52,6 +52,10 @@ fuzzy=true
 treeSitterEnabled=false
 treeSitterExecutable=tree-sitter
 treeSitterConfigPath=
+lspEnabled=false
+lspExecutable=clangd
+lspArguments=
+lspExtensions=c,cpp,cc,cxx,h,hpp,hxx
 ```
 
 `editor/fontFamily` 保存编辑区字体名称，初始为空时使用平台默认等宽字体（macOS 为 Menlo，Windows 为 Consolas，其他平台使用 Qt 系统等宽字体）。`editor/fontSize` 使用 pt，默认 13，支持 6–96。在“设置 → 字体与字号…”中确认后同时更新所有文档并持久化；取消只丢弃对话框中的选择。已有配置缺少字体名称时仍保留原字号。界面控件字体不受编辑器字体设置影响。
@@ -71,7 +75,11 @@ blur=0
 
 运行时监测原图片，并定期和在应用恢复激活时检查文件；原图片被移动、删除、损坏或无法读取时取消背景、释放图片缓存、恢复所有窗口区域的主题底色，并清空持久化的 `background/path`。启动时也执行校验，因此丢失的背景不会在重启后残留；保留不透明度和模糊偏好以便下次选图。图片重新出现后需要主动选择，不会自行恢复。图片解码与模糊结果在窗口内共享，输入与滚动时只绘制缓存。
 
-`language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。`language/treeSitterConfigPath` 可指定 Tree-sitter 的 `config.json`，留空使用 CLI 默认配置；建议填写绝对路径。在“设置 → 语言支持…”中确认后应用到所有已打开文档，并供新文档和重启后使用；取消不会修改设置，清除历史不会重置语言支持。语言解析器及其高亮规则由用户现有的 Tree-sitter 配置提供，NyaEdit 不自动安装。此设置提供语法着色，不包含 LSP 补全、诊断或定义跳转。
+`language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。`language/treeSitterConfigPath` 可指定 Tree-sitter 的 `config.json`，留空使用 CLI 默认配置；建议填写绝对路径。在“设置 → 语言支持…”中确认后应用到所有已打开文档，并供新文档和重启后使用；取消不会修改设置，清除历史不会重置语言支持。语言解析器及其高亮规则由用户现有的 Tree-sitter 配置提供，NyaEdit 不自动安装。
+
+`language/lspEnabled` 开启 LSP 补全与定义跳转，默认关闭，独立于 Tree-sitter。`language/lspExecutable` 为语言服务器程序名称或完整路径，默认 `clangd`；通过 PATH 查找，macOS 额外检查 Homebrew / MacPorts 的常见目录。`language/lspArguments` 为启动参数，使用 Qt 的参数拆分规则，含空格的参数用双引号包围，按参数直接启动进程；不要填写 shell 管道或重定向。`language/lspExtensions` 为适用文件后缀，默认 `c,cpp,cc,cxx,h,hpp,hxx`，不区分大小写，可用逗号、分号或空格分隔，不带前导点。Python 示例为 `lspExecutable=pylsp`、`lspExtensions=py`；需要先自行安装语言服务器。
+
+确认语言支持设置后，保存上述配置并重新连接服务器；取消保持原会话。关闭 LSP 开关会立即停止服务器；打开匹配的已保存文件后才会启动。每窗口一个 stdio 会话，项目根目录为当前打开的文件夹，否则为启动会话时首个代码文件所在目录。未命名文档、大文件模式和超过约 200 万 UTF-16 单元的文本跳过同步。LSP 状态常驻左下角，错误不弹出阻塞对话框；悬停查看详情，点击修改配置并重连。
 
 `animation/interface` 控制侧栏收放、文件树节点展开 / 收起、搜索面板展开 / 收起和页面切换；`animation/cursor` 控制光标平滑移动与渐变闪烁；`animation/selection` 控制选择高亮渐变。三个开关默认均为 `true`，相互独立。`animation/speed` 为速度倍率，默认 `1`，支持 `0.25–3`，数值越大越快。在“设置 → 动画设置…”中确认后立即保存并应用到所有文档；取消不会修改设置，清除历史也不会重置动画。旧配置缺少这些键时自动补齐默认值。选区在动画关闭或编辑器失去焦点时仍使用高对比颜色。
 

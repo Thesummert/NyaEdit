@@ -14,5 +14,9 @@ private:
     QCheckBox *m_enabled;
     QLineEdit *m_executable;
     QLineEdit *m_config;
+    QCheckBox *m_lspEnabled;
+    QLineEdit *m_lspExecutable;
+    QLineEdit *m_lspArguments;
+    QLineEdit *m_lspExtensions;
 };
 }

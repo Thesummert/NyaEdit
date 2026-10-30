@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "Editor.h"
+#include "EditorLsp.h"
 #include "FileIO.h"
 #include "FileSearch.h"
 #include "FileTreeView.h"
@@ -96,6 +97,15 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     m_languages.treeSitterEnabled = m_storage->value("language/treeSitterEnabled", false).toBool();
     m_languages.executable = m_storage->value("language/treeSitterExecutable", "tree-sitter").toString();
     m_languages.configPath = m_storage->value("language/treeSitterConfigPath").toString();
+    m_languages.lspEnabled = m_storage->value("language/lspEnabled", false).toBool();
+    m_languages.lspExecutable = m_storage->value("language/lspExecutable", "clangd").toString();
+    m_languages.lspArguments = m_storage->value("language/lspArguments").toString();
+    m_languages.lspExtensions = m_storage->value("language/lspExtensions", "c,cpp,cc,cxx,h,hpp,hxx").toString();
+    m_lsp = new EditorLsp(this);
+    connect(m_lsp, &EditorLsp::statusChanged, this, &MainWindow::updateLspStatus);
+    connect(m_lsp, &EditorLsp::message, this, [this](const QString &message) { statusBar()->showMessage(message, 8000); });
+    connect(m_lsp, &EditorLsp::definitionsFound, this, &MainWindow::showDefinitions);
+    m_lsp->configure(m_languages, {});
     m_animations.interfaceEnabled = m_storage->value("animation/interface", true).toBool();
     m_animations.cursorEnabled = m_storage->value("animation/cursor", true).toBool();
     m_animations.selectionEnabled = m_storage->value("animation/selection", true).toBool();
@@ -343,7 +353,8 @@ void MainWindow::setupMenus()
         }
     }, QKeySequence(QStringLiteral("Ctrl+Alt+S")));
     file->addSeparator();
-    file->addAction(QStringLiteral("关闭标签页"), this, [this] { if (current()) closeTab(m_tabs->currentIndex()); }, QKeySequence::Close);
+    auto *closeAction = file->addAction(QStringLiteral("关闭标签页"), this, [this] { if (current()) closeTab(m_tabs->currentIndex()); }, QKeySequence::Close);
+    closeAction->setObjectName("actionCloseTab");
     file->addAction(QStringLiteral("退出"), this, &QWidget::close, QKeySequence::Quit);
 
     auto *edit = menuBar()->addMenu(QStringLiteral("编辑(&E)"));
@@ -354,6 +365,12 @@ void MainWindow::setupMenus()
     edit->addAction(QStringLiteral("复制"), this, [this] { if (current()) current()->copy(); }, QKeySequence::Copy);
     edit->addAction(QStringLiteral("粘贴"), this, [this] { if (current()) current()->paste(); }, QKeySequence::Paste);
     edit->addAction(QStringLiteral("全选"), this, [this] { if (current()) current()->selectAll(); }, QKeySequence::SelectAll);
+    edit->addSeparator();
+    m_completionAction = edit->addAction(QStringLiteral("代码补全"), this, [this] { if (current()) current()->requestCompletion(); });
+    m_completionAction->setObjectName("actionCompletion");
+    m_completionAction->setShortcuts({QKeySequence(QStringLiteral("Alt+/")), QKeySequence(QStringLiteral("Ctrl+Space"))});
+    m_definitionAction = edit->addAction(QStringLiteral("转到定义"), this, [this] { if (current()) current()->requestDefinition(); }, QKeySequence(Qt::Key_F12));
+    m_definitionAction->setObjectName("actionDefinition");
 
     auto *search = menuBar()->addMenu(QStringLiteral("搜索(&S)"));
     auto *fileSearchAction = search->addAction(QStringLiteral("搜索文件…"), this, &MainWindow::focusFileSearch, QKeySequence(QStringLiteral("Ctrl+P")));
@@ -512,6 +529,10 @@ void MainWindow::setupStatus()
     m_treeSitterStatus->setMinimumWidth(m_treeSitterStatus->fontMetrics().horizontalAdvance(QStringLiteral("Tree-sitter · 解析中")));
     connect(m_treeSitterStatus, &QToolButton::clicked, this, &MainWindow::showTreeSitterError);
     layout->addWidget(m_treeSitterStatus);
+    m_lspStatus = new QToolButton; m_lspStatus->setObjectName("lspStatus"); m_lspStatus->setAutoRaise(true);
+    m_lspStatus->setCursor(Qt::PointingHandCursor);
+    connect(m_lspStatus, &QToolButton::clicked, this, &MainWindow::chooseLanguageSettings);
+    layout->addWidget(m_lspStatus); updateLspStatus();
     m_fileLabel = new QLabel; m_fileLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_fileLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(m_fileLabel, 1);
@@ -695,6 +716,7 @@ Editor *MainWindow::addEditor(const QString &name)
     editor->displayName = name; editor->setDark(m_dark);
     editor->setBackground(m_background, this);
     editor->setLanguageSettings(m_languages);
+    m_lsp->addEditor(editor);
     connect(editor, &Editor::languageStatusChanged, this, [this, editor](const QString &) {
         if (editor == current()) updateTreeSitterStatus();
     });
@@ -769,6 +791,7 @@ void MainWindow::openPath(const QString &path, const QString &forcedEncoding)
         auto *editor = guard.data();
         editor->loading = false;
         if (!result.ok()) {
+            m_lsp->removeEditor(editor);
             const int index = m_tabs->indexOf(editor); m_tabs->removeTab(index); editor->deleteLater();
             updateWorkspacePage();
             QMessageBox::warning(this, QStringLiteral("打开失败"), result.error); return;
@@ -779,12 +802,14 @@ void MainWindow::openPath(const QString &path, const QString &forcedEncoding)
         editor->setPlainText(result.text); editor->document()->setModified(false);
         editor->setReadOnly(false); editor->setPlaceholderText(QStringLiteral("在这里开始书写…"));
         editor->setLanguage(QFileInfo(result.path).suffix());
+        m_lsp->refreshEditor(editor);
         updateTab(editor);
         if (historyEpoch == m_historyEpoch) addRecent(result.path, folderRoot);
         if (pristine && pristine != editor && pristine->path.isEmpty() && !pristine->dirty() && pristine->document()->isEmpty() && !pristine->loading) {
-            const int index = m_tabs->indexOf(pristine); if (index >= 0) { m_tabs->removeTab(index); pristine->deleteLater(); }
+            const int index = m_tabs->indexOf(pristine); if (index >= 0) { m_lsp->removeEditor(pristine); m_tabs->removeTab(index); pristine->deleteLater(); }
         }
         refreshDocumentList(); updateStatus();
+        applyDefinitionPosition(editor);
         if (current() == editor) refreshSearch();
         if (result.encoding.confidence < 50) statusBar()->showMessage(QStringLiteral("编码判断置信度较低，请核对文字；可点击右下角编码重新打开。"), 12000);
         else if (result.mixedEndings) statusBar()->showMessage(QStringLiteral("检测到混合换行符，保存时会提示统一换行。"), 8000);
@@ -801,6 +826,7 @@ void MainWindow::openFolder(const QString &path)
         QMessageBox::warning(this, QStringLiteral("无法打开文件夹"), QStringLiteral("文件夹不存在或无法读取：%1").arg(selected)); return;
     }
     m_folderRoot = canonicalPath(selected);
+    m_lsp->configure(m_languages, m_folderRoot);
     const auto index = m_files->setRootPath(m_folderRoot); m_tree->setRootIndex(index); m_folderHint->hide();
     m_folderLabel->setText(QFileInfo(m_folderRoot).fileName()); m_folderLabel->setToolTip(m_folderRoot);
     m_fileSearchInput->setEnabled(true); scheduleFileSearch();
@@ -956,6 +982,7 @@ bool MainWindow::save(Editor *editor, bool saveAs)
     editor->diskModified = QFileInfo(path).lastModified(); editor->diskSize = QFileInfo(path).size();
     editor->mixedEndings = false; editor->metadataModified = false;
     editor->document()->setModified(false); editor->setLanguage(QFileInfo(path).suffix());
+    m_lsp->refreshEditor(editor, true);
     updateTab(editor); updateStatus();
     if (newPath) addRecent(path, m_folderRoot);
     statusBar()->showMessage(QStringLiteral("已保存 %1").arg(editor->displayName), 4000); return true;
@@ -974,6 +1001,7 @@ bool MainWindow::closeTab(int index)
 {
     auto *editor = qobject_cast<Editor *>(m_tabs->widget(index));
     if (!editor || !confirmDiscard(editor)) return false;
+    m_lsp->removeEditor(editor);
     m_tabs->removeTab(index); editor->deleteLater();
     updateWorkspacePage();
     refreshDocumentList(); return true;
@@ -985,6 +1013,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
         if (!confirmDiscard(qobject_cast<Editor *>(m_tabs->widget(i)))) { event->ignore(); return; }
     }
     m_taskRunner->stop();
+    // Stop the server even when the accepted close only hides this window.
+    auto disabledLanguages = m_languages; disabledLanguages.lspEnabled = false;
+    m_lsp->configure(disabledLanguages, m_folderRoot);
     m_sidebarTransition->finish(); m_searchTransition->finish(); m_pageTransition->finish();
     m_storage->setValue("window/sidebarWidth", m_sidebarTransition->expandedExtent());
     m_storage->setValue("window/geometry", saveGeometry()); m_storage->setValue("window/splitter", m_splitter->saveState());
@@ -1017,6 +1048,11 @@ void MainWindow::updateStatus()
     if (!m_position || !m_saveAction) return;
     updateTreeSitterStatus();
     auto *editor = current();
+    m_lsp->setCurrentEditor(editor);
+    updateLspStatus();
+    if (m_definitionTarget && m_definitionTarget != editor) m_definitionTarget = nullptr;
+    m_completionAction->setEnabled(editor && !editor->loading && !editor->path.isEmpty());
+    m_definitionAction->setEnabled(editor && !editor->loading && !editor->path.isEmpty());
     if (!editor) {
         m_saveAction->setEnabled(false); m_undoAction->setEnabled(false); m_redoAction->setEnabled(false);
         m_fileLabel->setText(QStringLiteral("欢迎使用 NyaEdit"));
@@ -1182,9 +1218,68 @@ void MainWindow::chooseLanguageSettings()
     m_storage->setValue("language/treeSitterEnabled", m_languages.treeSitterEnabled);
     m_storage->setValue("language/treeSitterExecutable", m_languages.executable);
     m_storage->setValue("language/treeSitterConfigPath", m_languages.configPath);
+    m_storage->setValue("language/lspEnabled", m_languages.lspEnabled);
+    m_storage->setValue("language/lspExecutable", m_languages.lspExecutable);
+    m_storage->setValue("language/lspArguments", m_languages.lspArguments);
+    m_storage->setValue("language/lspExtensions", m_languages.lspExtensions);
     for (int i = 0; i < m_tabs->count(); ++i)
         qobject_cast<Editor *>(m_tabs->widget(i))->setLanguageSettings(m_languages);
     updateTreeSitterStatus();
+    m_lsp->configure(m_languages, m_folderRoot);
+}
+
+void MainWindow::updateLspStatus()
+{
+    if (!m_lspStatus || !m_lsp) return;
+    m_lspStatus->setText(m_lsp->statusText());
+    m_lspStatus->setToolTip(m_lsp->statusDetail());
+    m_lspStatus->setAccessibleDescription(m_lsp->statusDetail());
+}
+
+void MainWindow::showDefinitions(Editor *source, const QJsonArray &locations)
+{
+    if (source != current() || locations.isEmpty()) return;
+    if (locations.size() == 1) { navigateToDefinition(locations.first().toObject()); return; }
+    auto *menu = new QMenu(this); menu->setObjectName("definitionLocations");
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    const QPointer<Editor> guard(source); const int revision = source->document()->revision();
+    for (int i = 0; i < qMin(100, int(locations.size())); ++i) {
+        const auto location = locations.at(i).toObject(); const QUrl uri(location.value("uri").toString());
+        const auto start = location.value("range").toObject().value("start").toObject();
+        auto *action = menu->addAction(QStringLiteral("%1:%2:%3").arg(uri.isLocalFile() ? uri.toLocalFile() : uri.toDisplayString())
+            .arg(start.value("line").toInt() + 1).arg(start.value("character").toInt() + 1));
+        connect(action, &QAction::triggered, this, [this, location, guard, revision] {
+            if (guard && guard == current() && guard->document()->revision() == revision) navigateToDefinition(location);
+        });
+    }
+    menu->popup(source->viewport()->mapToGlobal(source->cursorRect().bottomLeft()));
+}
+
+void MainWindow::navigateToDefinition(const QJsonObject &location)
+{
+    const QUrl uri(location.value("uri").toString());
+    if (!uri.isLocalFile() || !QFileInfo(uri.toLocalFile()).isFile()) {
+        statusBar()->showMessage(QStringLiteral("无法打开定义位置：%1").arg(uri.toDisplayString()), 8000); return;
+    }
+    const auto path = canonicalPath(uri.toLocalFile());
+    openPath(path);
+    auto *editor = current();
+    if (!editor || editor->path != path) return;
+    m_definitionTarget = editor; m_definitionRange = location.value("range").toObject();
+    applyDefinitionPosition(editor);
+}
+
+void MainWindow::applyDefinitionPosition(Editor *editor)
+{
+    if (!editor || editor != m_definitionTarget || editor->loading) return;
+    m_definitionTarget = nullptr;
+    if (editor != current()) return;
+    const auto start = editor->lspOffset(m_definitionRange.value("start").toObject());
+    const auto end = editor->lspOffset(m_definitionRange.value("end").toObject());
+    if (start < 0) { statusBar()->showMessage(QStringLiteral("定义位置已失效，请重新请求跳转。"), 5000); return; }
+    auto cursor = editor->textCursor(); cursor.setPosition(start);
+    if (end >= start) cursor.setPosition(end, QTextCursor::KeepAnchor);
+    editor->setTextCursor(cursor); editor->ensureCursorVisible(); editor->setFocus();
 }
 
 void MainWindow::chooseBackgroundSettings()
@@ -1366,18 +1461,20 @@ void MainWindow::reopenEncoding(const QString &name)
     auto *editor = current(); if (!editor || editor->path.isEmpty() || editor->loading) return;
     if (!confirmDiscard(editor)) return;
     editor->loading = true; editor->setReadOnly(true); updateTab(editor); updateStatus();
+    m_lsp->refreshEditor(editor);
     auto *watcher = new QFutureWatcher<LoadedFile>(this); QPointer<Editor> guard(editor);
     const QString path = editor->path;
     connect(watcher, &QFutureWatcher<LoadedFile>::finished, this, [this, watcher, guard] {
         const auto result = watcher->result(); watcher->deleteLater(); if (!guard || m_tabs->indexOf(guard) < 0) return;
         auto *editor = guard.data(); editor->loading = false; editor->setReadOnly(false);
-        if (!result.ok()) { updateTab(editor); updateStatus(); QMessageBox::warning(this, QStringLiteral("重新打开失败"), result.error); return; }
+        if (!result.ok()) { m_lsp->refreshEditor(editor); updateTab(editor); updateStatus(); QMessageBox::warning(this, QStringLiteral("重新打开失败"), result.error); return; }
         const int position = editor->textCursor().position();
         editor->encoding = result.encoding; editor->ending = result.ending; editor->mixedEndings = result.mixedEndings;
         editor->diskModified = result.modified; editor->diskSize = result.byteSize; editor->largeFile = result.byteSize > 2 * 1024 * 1024;
         editor->metadataModified = false; editor->setPlainText(result.text); editor->document()->setModified(false);
         auto cursor = editor->textCursor(); cursor.setPosition(qMin(position, int(result.text.size()))); editor->setTextCursor(cursor);
         editor->setLanguage(QFileInfo(result.path).suffix()); updateTab(editor); updateStatus(); refreshSearch();
+        m_lsp->refreshEditor(editor);
     });
     watcher->setFuture(QtConcurrent::run([path, name] { return loadFile(path, name); }));
 }

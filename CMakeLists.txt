@@ -35,6 +35,8 @@ add_library(nya_widgets STATIC
     src/ui/BackgroundSettingsDialog.cpp src/ui/BackgroundSettingsDialog.h
     src/ui/EditorBackground.cpp src/ui/EditorBackground.h
     src/ui/Editor.cpp src/ui/Editor.h
+    src/ui/EditorCompletion.cpp
+    src/ui/EditorLsp.cpp src/ui/EditorLsp.h
     src/ui/FileTreeView.cpp src/ui/FileTreeView.h
     src/ui/FontSettingsDialog.cpp src/ui/FontSettingsDialog.h
     src/ui/Highlighter.cpp src/ui/Highlighter.h
@@ -78,13 +80,21 @@ if(BUILD_TESTING)
     set_tests_properties(nya_task_tests PROPERTIES TIMEOUT 60)
     add_executable(nya_ui_tests tests/WidgetTests.cpp)
     target_link_libraries(nya_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
-    add_dependencies(nya_ui_tests nya_tree_sitter_tests nya_task_tests)
+    add_dependencies(nya_ui_tests nya_tree_sitter_tests nya_lsp_tests nya_task_tests)
     if(MSVC)
         target_compile_options(nya_ui_tests PRIVATE /utf-8)
         target_compile_options(nya_task_tests PRIVATE /utf-8)
     endif()
     add_test(NAME nya_ui_tests COMMAND nya_ui_tests -platform offscreen)
     set_tests_properties(nya_ui_tests PROPERTIES TIMEOUT 90)
+    add_executable(nya_lsp_ui_tests tests/LspWidgetTests.cpp)
+    target_link_libraries(nya_lsp_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
+    add_dependencies(nya_lsp_ui_tests nya_lsp_tests)
+    if(MSVC)
+        target_compile_options(nya_lsp_ui_tests PRIVATE /utf-8)
+    endif()
+    add_test(NAME nya_lsp_ui_tests COMMAND nya_lsp_ui_tests -platform offscreen)
+    set_tests_properties(nya_lsp_ui_tests PROPERTIES TIMEOUT 90)
 endif()
 
 option(NYA_BUILD_TOOLS "Build preview and performance measurement tools" OFF)

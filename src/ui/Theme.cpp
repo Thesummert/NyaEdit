@@ -130,6 +130,21 @@ void Theme::apply(QApplication &app, bool dark)
     QFont uiFont = app.font();
     uiFont.setPixelSize(13);
     app.setFont(uiFont);
+    const auto completionStyle = QStringLiteral(R"(
+        QListWidget#lspCompletionPopup {
+            background: transparent; color: %1;
+            border: 2px solid %2; border-radius: 4px;
+            selection-background-color: %3; selection-color: white;
+        }
+        QListWidget#lspCompletionPopup::item {
+            padding: 6px 10px; border-radius: 2px; color: %1;
+        }
+        QListWidget#lspCompletionPopup::item:hover { background: %4; }
+        QListWidget#lspCompletionPopup::item:selected {
+            background: %3; color: white; font-weight: 600;
+        }
+    )").arg(dark ? "#f4f7fc" : "#15253c", dark ? "#91a9cc" : "#536b8a", dark ? "#2867bd" : "#1c5eac",
+           dark ? "#3a4c66" : "#dfebfa");
     app.setStyleSheet(QStringLiteral(R"(
         QMainWindow { background: %1; }
         QWidget#welcomePage { background: %1; }
@@ -187,6 +202,6 @@ void Theme::apply(QApplication &app, bool dark)
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
         QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
         QToolTip { background: %2; color: %5; border: 1px solid %4; padding: 5px; }
-    )").arg(bg, panel, raised, border, fg, muted, accent, selection));
+    )").arg(bg, panel, raised, border, fg, muted, accent, selection) + completionStyle);
 }
 }

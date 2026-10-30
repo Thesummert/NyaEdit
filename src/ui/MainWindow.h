@@ -5,6 +5,9 @@
 #include "TreeSitter.h"
 #include <QFont>
 #include <QMainWindow>
+#include <QJsonObject>
+#include <QPointer>
+#include <QUrl>
 #include <atomic>
 #include <memory>
 
@@ -28,6 +31,7 @@ class QTreeView;
 namespace nya {
 class Editor;
 class EditorBackground;
+class EditorLsp;
 class FileTreeView;
 class TaskPanel;
 class TaskRunner;
@@ -85,6 +89,10 @@ private:
     void updateBackgroundSurface();
     void chooseAnimationSettings();
     void chooseLanguageSettings();
+    void updateLspStatus();
+    void showDefinitions(Editor *source, const QJsonArray &locations);
+    void navigateToDefinition(const QJsonObject &location);
+    void applyDefinitionPosition(Editor *editor);
     void applyAnimationSettings();
     QFont configuredEditorFont() const;
     void storeEditorFont(const QFont &font);
@@ -121,6 +129,12 @@ private:
     PageTransition *m_pageTransition = nullptr;
     AnimationSettings m_animations;
     LanguageSettings m_languages;
+    EditorLsp *m_lsp = nullptr;
+    QToolButton *m_lspStatus = nullptr;
+    QAction *m_completionAction = nullptr;
+    QAction *m_definitionAction = nullptr;
+    QPointer<Editor> m_definitionTarget;
+    QJsonObject m_definitionRange;
     QListWidget *m_documents = nullptr;
     QFileSystemModel *m_files = nullptr;
     FileTreeView *m_tree = nullptr;

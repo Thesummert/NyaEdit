@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QListWidget>
 #include <QPainter>
 #include <QScrollBar>
 #include <QTextBlock>
@@ -104,6 +105,7 @@ void Editor::setDark(bool dark)
     updateGutterWidth();
     m_highlighter->setDark(dark); m_gutter->update(); updateHighlights();
     m_selectionFade.stop(); updateSelectionPalette(); updateAnimatedCursor(false);
+    if (m_completions && m_completions->isVisible()) updateCompletionBackdrop();
 }
 void Editor::setSearchMatches(const QVector<SearchMatch> &matches) { m_matches = matches; updateHighlights(); }
 EditorBackground *Editor::background() const { return m_background.data(); }
@@ -237,6 +239,7 @@ void Editor::focusInEvent(QFocusEvent *event)
 }
 void Editor::focusOutEvent(QFocusEvent *event)
 {
+    hideCompletions();
     m_cursorMotion.stop(); m_cursorBlink.stop(); m_selectionFade.stop(); updateSelectionPalette();
     QPlainTextEdit::focusOutEvent(event); viewport()->update();
 }
@@ -246,6 +249,7 @@ void Editor::showEvent(QShowEvent *event)
 }
 void Editor::hideEvent(QHideEvent *event)
 {
+    hideCompletions();
     m_cursorMotion.stop(); m_cursorBlink.stop(); m_selectionFade.stop(); updateSelectionPalette();
     QPlainTextEdit::hideEvent(event);
 }
@@ -326,6 +330,7 @@ void Editor::indentSelection(bool outdent)
 }
 void Editor::keyPressEvent(QKeyEvent *event)
 {
+    if (handleCompletionKey(event)) return;
     if (isReadOnly()) { QPlainTextEdit::keyPressEvent(event); return; }
     if (event->key() == Qt::Key_Backtab || (event->key() == Qt::Key_Tab && textCursor().hasSelection())) {
         indentSelection(event->key() == Qt::Key_Backtab); return;
@@ -341,6 +346,9 @@ void Editor::keyPressEvent(QKeyEvent *event)
         auto edit = cursor; edit.beginEditBlock(); edit.insertText("\n" + before.left(spaces)); edit.endEditBlock(); setTextCursor(edit); return;
     }
     QPlainTextEdit::keyPressEvent(event);
+    if ((!event->text().isEmpty() && !event->text().at(0).isSpace()
+         && !(event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier)))
+        || event->key() == Qt::Key_Backspace) emit completionRequested(true);
 }
 void Editor::wheelEvent(QWheelEvent *event)
 {

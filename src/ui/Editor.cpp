@@ -36,6 +36,7 @@ Editor::Editor(QWidget *parent) : QPlainTextEdit(parent), m_gutter(new Gutter(th
     m_highlighter(new Highlighter(document()))
 {
     m_editorFont = defaultEditorFont();
+    connect(m_highlighter, &Highlighter::languageStatusChanged, this, &Editor::languageStatusChanged);
     setFont(m_editorFont);
     setTabStopDistance(QFontMetricsF(this->font(), viewport()).horizontalAdvance(' ') * 4);
     setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -85,6 +86,9 @@ QString Editor::contents() const
     return text;
 }
 void Editor::setLanguage(const QString &suffix) { m_highlighter->setLanguage(largeFile ? QString() : suffix); }
+void Editor::setLanguageSettings(const LanguageSettings &settings) { m_highlighter->setLanguageSettings(settings); }
+LanguageSettings Editor::languageSettings() const { return m_highlighter->languageSettings(); }
+TreeSitterStatus Editor::treeSitterStatus() const { return m_highlighter->treeSitterStatus(); }
 void Editor::setDark(bool dark)
 {
     m_dark = dark;

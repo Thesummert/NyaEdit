@@ -77,7 +77,9 @@ bool AppStorage::initialize(bool importLegacySettings)
     const QMap<QString, QVariant> defaults{
         {"meta/schemaVersion", 1}, {"appearance/dark", true}, {"appearance/sidebar", true},
         {"animation/interface", true}, {"animation/cursor", true}, {"animation/selection", true}, {"animation/speed", 1.0},
-        {"editor/fontFamily", QString()}, {"editor/fontSize", 13}, {"editor/wrap", false}, {"search/fuzzy", true}};
+        {"editor/fontFamily", QString()}, {"editor/fontSize", 13}, {"editor/wrap", false}, {"search/fuzzy", true},
+        {"language/treeSitterEnabled", false}, {"language/treeSitterExecutable", QStringLiteral("tree-sitter")},
+        {"language/treeSitterConfigPath", QString()}};
     for (auto it = defaults.cbegin(); it != defaults.cend(); ++it)
         if (!m_editor->contains(it.key())) m_editor->setValue(it.key(), it.value());
     if (!m_system->contains("meta/schemaVersion")) m_system->setValue("meta/schemaVersion", 1);

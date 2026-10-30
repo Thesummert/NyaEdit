@@ -4,7 +4,7 @@
 
 | 文件 | 内容 | 位置接口 |
 | --- | --- | --- |
-| `editor.ini` | 主题、侧栏、字体及字号、动画、自动换行、文件搜索模式、窗口位置及分栏尺寸 | `QStandardPaths::AppConfigLocation` |
+| `editor.ini` | 主题、侧栏、字体及字号、动画、语言支持、自动换行、文件搜索模式、窗口位置及分栏尺寸 | `QStandardPaths::AppConfigLocation` |
 | `system.ini` | 预留应用系统选项，目前只有格式版本 | `QStandardPaths::AppConfigLocation` |
 | `history.json` | 最近文件与文件夹、打开时间、文件选择器上次目录 | `QStandardPaths::AppLocalDataLocation` |
 
@@ -47,11 +47,18 @@ wrap=false
 
 [search]
 fuzzy=true
+
+[language]
+treeSitterEnabled=false
+treeSitterExecutable=tree-sitter
+treeSitterConfigPath=
 ```
 
 `editor/fontFamily` 保存编辑区字体名称，初始为空时使用平台默认等宽字体（macOS 为 Menlo，Windows 为 Consolas，其他平台使用 Qt 系统等宽字体）。`editor/fontSize` 使用 pt，默认 13，支持 6–96。在“设置 → 字体与字号…”中确认后同时更新所有文档并持久化；取消只丢弃对话框中的选择。已有配置缺少字体名称时仍保留原字号。界面控件字体不受编辑器字体设置影响。
 
 `search/fuzzy` 控制文件夹搜索：默认 `true`，字符按顺序非连续匹配；关闭后使用连续片段匹配。在搜索框右键菜单中切换后立即保存并重新搜索，清除历史不会重置此设置。
+
+`language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。`language/treeSitterConfigPath` 可指定 Tree-sitter 的 `config.json`，留空使用 CLI 默认配置；建议填写绝对路径。在“设置 → 语言支持…”中确认后应用到所有已打开文档，并供新文档和重启后使用；取消不会修改设置，清除历史不会重置语言支持。语言解析器及其高亮规则由用户现有的 Tree-sitter 配置提供，NyaEdit 不自动安装。此设置提供语法着色，不包含 LSP 补全、诊断或定义跳转。
 
 `animation/interface` 控制侧栏收放、文件树节点展开 / 收起、搜索面板展开 / 收起和页面切换；`animation/cursor` 控制光标平滑移动与渐变闪烁；`animation/selection` 控制选择高亮渐变。三个开关默认均为 `true`，相互独立。`animation/speed` 为速度倍率，默认 `1`，支持 `0.25–3`，数值越大越快。在“设置 → 动画设置…”中确认后立即保存并应用到所有文档；取消不会修改设置，清除历史也不会重置动画。旧配置缺少这些键时自动补齐默认值。选区在动画关闭或编辑器失去焦点时仍使用高对比颜色。
 

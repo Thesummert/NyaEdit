@@ -5,6 +5,7 @@
 #include "FileTreeView.h"
 #include "FontSettingsDialog.h"
 #include "AnimationSettingsDialog.h"
+#include "LanguageSettingsDialog.h"
 #include "Theme.h"
 #include "WelcomePage.h"
 
@@ -78,6 +79,9 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     const bool storageReady = m_storage->initialize(importLegacy);
     m_dark = m_storage->value("appearance/dark", true).toBool();
     m_wrap = m_storage->value("editor/wrap", false).toBool();
+    m_languages.treeSitterEnabled = m_storage->value("language/treeSitterEnabled", false).toBool();
+    m_languages.executable = m_storage->value("language/treeSitterExecutable", "tree-sitter").toString();
+    m_languages.configPath = m_storage->value("language/treeSitterConfigPath").toString();
     m_animations.interfaceEnabled = m_storage->value("animation/interface", true).toBool();
     m_animations.cursorEnabled = m_storage->value("animation/cursor", true).toBool();
     m_animations.selectionEnabled = m_storage->value("animation/selection", true).toBool();
@@ -342,6 +346,8 @@ void MainWindow::setupMenus()
     fontSettings->setObjectName("actionFontSettings");
     auto *animationSettings = settings->addAction(QStringLiteral("动画设置…"), this, &MainWindow::chooseAnimationSettings);
     animationSettings->setObjectName("actionAnimationSettings");
+    auto *languageSettings = settings->addAction(QStringLiteral("语言支持…"), this, &MainWindow::chooseLanguageSettings);
+    languageSettings->setObjectName("actionLanguageSettings");
     settings->addSeparator();
     auto *configDirectory = settings->addAction(QStringLiteral("打开配置目录"), this, [this] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(m_storage->paths().configDirectory));
@@ -423,10 +429,24 @@ void MainWindow::setupSearch()
 
 void MainWindow::setupStatus()
 {
+    auto *left = new QWidget;
+    auto *layout = new QHBoxLayout(left); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(14);
+    m_treeSitterStatus = new QToolButton; m_treeSitterStatus->setObjectName("treeSitterStatus");
+    m_treeSitterStatus->setAutoRaise(true);
+    m_treeSitterStatus->setMinimumWidth(m_treeSitterStatus->fontMetrics().horizontalAdvance(QStringLiteral("Tree-sitter · 解析中")));
+    connect(m_treeSitterStatus, &QToolButton::clicked, this, &MainWindow::showTreeSitterError);
+    layout->addWidget(m_treeSitterStatus);
     m_fileLabel = new QLabel; m_fileLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    statusBar()->addWidget(m_fileLabel, 1);
-    connect(statusBar(), &QStatusBar::messageChanged, this, [this](const QString &message) {
+    m_fileLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    layout->addWidget(m_fileLabel, 1);
+    auto *messageLabel = new QLabel; messageLabel->setObjectName("statusMessage"); messageLabel->setTextFormat(Qt::PlainText);
+    messageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); messageLabel->hide();
+    layout->addWidget(messageLabel, 1);
+    // Keep the indicator at the far left even while QStatusBar has a temporary message.
+    statusBar()->addPermanentWidget(left, 1);
+    connect(statusBar(), &QStatusBar::messageChanged, this, [this, messageLabel](const QString &message) {
         m_fileLabel->setVisible(message.isEmpty());
+        messageLabel->setText(message); messageLabel->setToolTip(message); messageLabel->setVisible(!message.isEmpty());
     });
     m_position = button({}, QStringLiteral("跳转到行"), this); connect(m_position, &QToolButton::clicked, this, &MainWindow::gotoLine);
     m_encoding = button({}, QStringLiteral("重新解码 / 转换保存编码"), this); connect(m_encoding, &QToolButton::clicked, this, &MainWindow::showEncodingMenu);
@@ -446,6 +466,10 @@ Editor *MainWindow::addEditor(const QString &name)
 {
     auto *editor = new Editor;
     editor->displayName = name; editor->setDark(m_dark);
+    editor->setLanguageSettings(m_languages);
+    connect(editor, &Editor::languageStatusChanged, this, [this, editor](const QString &) {
+        if (editor == current()) updateTreeSitterStatus();
+    });
     editor->setAnimationSettings(m_animations);
     editor->setLineWrapMode(m_wrap ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
     editor->setEditorFont(configuredEditorFont());
@@ -761,6 +785,7 @@ void MainWindow::refreshDocumentList()
 void MainWindow::updateStatus()
 {
     if (!m_position || !m_saveAction) return;
+    updateTreeSitterStatus();
     auto *editor = current();
     if (!editor) {
         m_saveAction->setEnabled(false); m_undoAction->setEnabled(false); m_redoAction->setEnabled(false);
@@ -784,6 +809,56 @@ void MainWindow::updateStatus()
     m_redoAction->setEnabled(!editor->loading && editor->document()->isRedoAvailable());
     m_encoding->setEnabled(!editor->loading); m_ending->setEnabled(!editor->loading);
     setWindowTitle(QStringLiteral("%1%2 — NyaEdit").arg(editor->dirty() ? QStringLiteral("● ") : QString(), editor->displayName));
+}
+
+void MainWindow::updateTreeSitterStatus()
+{
+    if (!m_treeSitterStatus) return;
+    TreeSitterStatus status;
+    if (auto *editor = current()) {
+        status = editor->treeSitterStatus();
+        if (editor->languageSettings().treeSitterEnabled) {
+            if (editor->loading) status = {TreeSitterState::Pending, QStringLiteral("正在读取文件，读取完成后开始解析。")};
+            else if (editor->largeFile) status = {TreeSitterState::Idle, QStringLiteral("大文件模式已跳过 Tree-sitter 和语法着色。")};
+        }
+    } else if (m_languages.treeSitterEnabled) {
+        status = {TreeSitterState::Idle, QStringLiteral("Tree-sitter 已开启，等待打开代码文档。")};
+    }
+    QString caption, color;
+    switch (status.state) {
+    case TreeSitterState::Working:
+        caption = QStringLiteral("正常"); color = m_dark ? "#a4d7a0" : "#368650"; break;
+    case TreeSitterState::Pending:
+        caption = QStringLiteral("解析中"); color = m_dark ? "#89b9f7" : "#2967ad"; break;
+    case TreeSitterState::Error:
+        caption = QStringLiteral("异常"); color = m_dark ? "#ecc48d" : "#a9681c"; break;
+    case TreeSitterState::Idle:
+        caption = QStringLiteral("待命"); color = m_dark ? "#a8b4c5" : "#65738a"; break;
+    case TreeSitterState::Disabled:
+        caption = QStringLiteral("已关闭"); color = m_dark ? "#a8b4c5" : "#65738a"; break;
+    }
+    const bool error = status.state == TreeSitterState::Error;
+    m_treeSitterStatus->setText(QStringLiteral("Tree-sitter · %1").arg(caption));
+    m_treeSitterStatus->setStyleSheet(QStringLiteral("QToolButton { color: %1; padding: 0px; }").arg(color));
+    m_treeSitterStatus->setToolTip(status.detail + (error ? QStringLiteral("\n点击查看异常信息") : QString()));
+    m_treeSitterStatus->setAccessibleDescription(status.detail);
+    m_treeSitterStatus->setCursor(error ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    m_treeSitterStatus->setFocusPolicy(error ? Qt::StrongFocus : Qt::NoFocus);
+}
+
+void MainWindow::showTreeSitterError()
+{
+    const auto *editor = current();
+    if (!editor || editor->loading || editor->largeFile || editor->treeSitterStatus().state != TreeSitterState::Error) return;
+    auto *dialog = new QMessageBox(QMessageBox::Warning, QStringLiteral("Tree-sitter 异常"),
+                                  QStringLiteral("Tree-sitter 语法着色异常，当前文档已使用基础着色。"), QMessageBox::Close, this);
+    dialog->setObjectName("treeSitterErrorDialog"); dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setTextFormat(Qt::PlainText);
+    dialog->setInformativeText(editor->treeSitterStatus().detail + QStringLiteral(
+        "\n\n请在“设置 → 语言支持…”检查可执行文件和配置，并确认已安装对应语言解析器及高亮规则。"));
+    dialog->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    dialog->button(QMessageBox::Close)->setText(QStringLiteral("关闭"));
+    dialog->open();
 }
 
 void MainWindow::addRecent(const QString &path, const QString &folderRoot)
@@ -866,6 +941,19 @@ void MainWindow::chooseEditorFont()
         QSignalBlocker blocker(editor); editor->setEditorFont(font);
     }
     updateStatus();
+}
+
+void MainWindow::chooseLanguageSettings()
+{
+    LanguageSettingsDialog dialog(m_languages, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    m_languages = dialog.settings();
+    m_storage->setValue("language/treeSitterEnabled", m_languages.treeSitterEnabled);
+    m_storage->setValue("language/treeSitterExecutable", m_languages.executable);
+    m_storage->setValue("language/treeSitterConfigPath", m_languages.configPath);
+    for (int i = 0; i < m_tabs->count(); ++i)
+        qobject_cast<Editor *>(m_tabs->widget(i))->setLanguageSettings(m_languages);
+    updateTreeSitterStatus();
 }
 
 void MainWindow::chooseAnimationSettings()

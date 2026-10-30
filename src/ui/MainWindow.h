@@ -2,6 +2,7 @@
 #include "Search.h"
 #include "AppStorage.h"
 #include "Animation.h"
+#include "TreeSitter.h"
 #include <QFont>
 #include <QMainWindow>
 #include <atomic>
@@ -55,6 +56,8 @@ private:
     bool closeTab(int index);
     void updateTab(Editor *editor);
     void updateStatus();
+    void updateTreeSitterStatus();
+    void showTreeSitterError();
     void refreshDocumentList();
     void rebuildRecentMenu();
     void addRecent(const QString &path, const QString &folderRoot);
@@ -64,6 +67,7 @@ private:
     void setDark(bool dark);
     void chooseEditorFont();
     void chooseAnimationSettings();
+    void chooseLanguageSettings();
     void applyAnimationSettings();
     QFont configuredEditorFont() const;
     void storeEditorFont(const QFont &font);
@@ -98,6 +102,7 @@ private:
     PanelTransition *m_searchTransition = nullptr;
     PageTransition *m_pageTransition = nullptr;
     AnimationSettings m_animations;
+    LanguageSettings m_languages;
     QListWidget *m_documents = nullptr;
     QFileSystemModel *m_files = nullptr;
     FileTreeView *m_tree = nullptr;
@@ -121,6 +126,7 @@ private:
     QToolButton *m_regex = nullptr;
     QLabel *m_matchLabel = nullptr;
     QLabel *m_fileLabel = nullptr;
+    QToolButton *m_treeSitterStatus = nullptr;
     QToolButton *m_position = nullptr;
     QToolButton *m_encoding = nullptr;
     QToolButton *m_ending = nullptr;

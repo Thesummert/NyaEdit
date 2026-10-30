@@ -2,6 +2,7 @@
 #include "FileIO.h"
 #include "Search.h"
 #include "Animation.h"
+#include "TreeSitter.h"
 #include <QPlainTextEdit>
 
 namespace nya {
@@ -24,6 +25,9 @@ public:
     bool dirty() const;
     QString contents() const;
     void setLanguage(const QString &suffix);
+    void setLanguageSettings(const LanguageSettings &settings);
+    LanguageSettings languageSettings() const;
+    TreeSitterStatus treeSitterStatus() const;
     void setDark(bool dark);
     void setSearchMatches(const QVector<SearchMatch> &matches);
     void clearSearchMatches();
@@ -39,6 +43,7 @@ public:
     void setAnimationSettings(const AnimationSettings &settings);
     AnimationSettings animationSettings() const { return m_animationSettings; }
 signals:
+    void languageStatusChanged(const QString &status);
     void zoomChanged();
     void editorFontChanged();
 protected:

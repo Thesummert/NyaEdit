@@ -1,6 +1,7 @@
 #include "Editor.h"
 #include "FontSettingsDialog.h"
 #include "AnimationSettingsDialog.h"
+#include "LanguageSettingsDialog.h"
 #include "Theme.h"
 #include "FileTreeView.h"
 #include "MainWindow.h"
@@ -27,10 +28,13 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStandardItemModel>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QToolButton>
 #include <QTreeView>
 #include <QtTest>
@@ -76,6 +80,140 @@ class WidgetTests : public QObject {
         return result;
     }
 private slots:
+    void treeSitterIndicatorFollowsCurrentDocumentAndStaysVisible()
+    {
+        QString executable = QCoreApplication::applicationDirPath() + "/nya_tree_sitter_tests";
+#ifdef Q_OS_WIN
+        executable += ".exe";
+#endif
+        AppStorage storage(testPaths()); QVERIFY(storage.initialize(false));
+        QVERIFY(storage.setValue("language/treeSitterEnabled", true));
+        QVERIFY(storage.setValue("language/treeSitterExecutable", executable));
+        MainWindow window(nullptr, testPaths()); window.show();
+        auto *indicator = window.findChild<QToolButton *>("treeSitterStatus"); QVERIFY(indicator);
+        QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 待命"));
+        window.newDocument();
+        auto *tabs = window.findChild<QTabWidget *>(); auto *editor = qobject_cast<Editor *>(tabs->currentWidget());
+        editor->setLanguage("cpp"); editor->setPlainText("int value = 42;");
+        QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 解析中"));
+        QTRY_COMPARE(indicator->text(), QStringLiteral("Tree-sitter · 正常"));
+        QVERIFY(indicator->toolTip().contains(QStringLiteral("成功解析")));
+        QTest::mouseClick(indicator, Qt::LeftButton);
+        QVERIFY(!window.findChild<QMessageBox *>("treeSitterErrorDialog"));
+        window.resize(760, 480); QApplication::processEvents();
+        QVERIFY(indicator->mapTo(&window, QPoint()).x() < 30);
+        window.statusBar()->showMessage(QStringLiteral("文件已保存"));
+        QVERIFY(indicator->isVisible()); QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 正常"));
+        auto *message = window.findChild<QLabel *>("statusMessage"); QVERIFY(message->isVisible());
+        QCOMPARE(message->text(), QStringLiteral("文件已保存"));
+        window.statusBar()->clearMessage(); QVERIFY(indicator->isVisible()); QVERIFY(!message->isVisible());
+
+        auto settings = editor->languageSettings(); settings.configPath = "fail";
+        editor->setLanguageSettings(settings); window.newDocument();
+        QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 待命"));
+        QTRY_VERIFY(editor->treeSitterStatus().state == TreeSitterState::Error);
+        QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 待命")); // Background errors belong to their document.
+        tabs->setCurrentIndex(0); QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 异常"));
+        QVERIFY(indicator->toolTip().contains(QStringLiteral("基础着色")));
+        QCOMPARE(indicator->cursor().shape(), Qt::PointingHandCursor);
+        QTest::mouseClick(indicator, Qt::LeftButton);
+        auto *errorDialog = window.findChild<QMessageBox *>("treeSitterErrorDialog"); QVERIFY(errorDialog);
+        QVERIFY(errorDialog->isVisible()); QCOMPARE(errorDialog->textFormat(), Qt::PlainText);
+        QVERIFY(errorDialog->informativeText().contains("No language found"));
+        QVERIFY(errorDialog->informativeText().contains(QStringLiteral("设置 → 语言支持")));
+        errorDialog->close(); QTRY_VERIFY(!window.findChild<QMessageBox *>("treeSitterErrorDialog"));
+
+        settings.configPath = "slow"; editor->setLanguageSettings(settings); QTest::qWait(350);
+        settings.treeSitterEnabled = false; editor->setLanguageSettings(settings);
+        QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 已关闭"));
+        QTest::qWait(850); QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 已关闭"));
+        QTest::mouseClick(indicator, Qt::LeftButton); QVERIFY(!window.findChild<QMessageBox *>("treeSitterErrorDialog"));
+        settings.treeSitterEnabled = true; settings.executable = "/nyaedit-missing/tree-sitter";
+        editor->setLanguageSettings(settings); QTRY_COMPARE(indicator->text(), QStringLiteral("Tree-sitter · 异常"));
+        QVERIFY(indicator->toolTip().contains(QStringLiteral("未找到")));
+        indicator->setFocus(); QTest::keyClick(indicator, Qt::Key_Space);
+        errorDialog = window.findChild<QMessageBox *>("treeSitterErrorDialog"); QVERIFY(errorDialog);
+        QVERIFY(errorDialog->informativeText().contains(QStringLiteral("未找到")));
+        QVERIFY(!errorDialog->informativeText().contains("No language found"));
+        errorDialog->close(); QTRY_VERIFY(!window.findChild<QMessageBox *>("treeSitterErrorDialog"));
+        editor->clear(); QTRY_COMPARE(indicator->text(), QStringLiteral("Tree-sitter · 待命"));
+        QVERIFY(indicator->toolTip().contains(QStringLiteral("为空")));
+        editor->largeFile = true; editor->setLanguage("cpp");
+        QCOMPARE(indicator->text(), QStringLiteral("Tree-sitter · 待命"));
+        QVERIFY(indicator->toolTip().contains(QStringLiteral("大文件")));
+        editor->document()->setModified(false);
+    }
+    void languageSettingsApplyCancelAndPersist()
+    {
+        QString executable = QCoreApplication::applicationDirPath() + "/nya_tree_sitter_tests";
+#ifdef Q_OS_WIN
+        executable += ".exe";
+#endif
+        {
+            MainWindow window(nullptr, testPaths()); window.newDocument(); window.newDocument();
+            auto *tabs = window.findChild<QTabWidget *>();
+            auto *action = window.findChild<QAction *>("actionLanguageSettings"); QVERIFY(action);
+            bool handled = false;
+            QTimer::singleShot(0, [&] {
+                auto *dialog = qobject_cast<LanguageSettingsDialog *>(QApplication::activeModalWidget());
+                if (!dialog) return;
+                dialog->findChild<QCheckBox *>("treeSitterEnabled")->setChecked(true);
+                dialog->reject(); handled = true;
+            });
+            action->trigger(); QVERIFY(handled);
+            QVERIFY(!qobject_cast<Editor *>(tabs->currentWidget())->languageSettings().treeSitterEnabled);
+            handled = false;
+            QTimer::singleShot(0, [&] {
+                auto *dialog = qobject_cast<LanguageSettingsDialog *>(QApplication::activeModalWidget());
+                if (!dialog) return;
+                dialog->findChild<QCheckBox *>("treeSitterEnabled")->setChecked(true);
+                dialog->findChild<QLineEdit *>("treeSitterExecutable")->setText(executable);
+                dialog->findChild<QLineEdit *>("treeSitterConfigPath")->setText("custom config.json");
+                dialog->accept(); handled = true;
+            });
+            action->trigger(); QVERIFY(handled);
+            for (int i = 0; i < tabs->count(); ++i) {
+                auto *editor = qobject_cast<Editor *>(tabs->widget(i));
+                QVERIFY(editor->languageSettings().treeSitterEnabled); QVERIFY(!editor->dirty());
+                QCOMPARE(editor->languageSettings().executable, executable);
+            }
+            window.newDocument(); QVERIFY(qobject_cast<Editor *>(tabs->currentWidget())->languageSettings().treeSitterEnabled);
+        }
+        MainWindow reloaded(nullptr, testPaths()); reloaded.newDocument();
+        auto *editor = qobject_cast<Editor *>(reloaded.findChild<QTabWidget *>()->currentWidget());
+        QVERIFY(editor->languageSettings().treeSitterEnabled); QCOMPARE(editor->languageSettings().executable, executable);
+        QCOMPARE(editor->languageSettings().configPath, QString("custom config.json"));
+    }
+    void treeSitterHighlightRefreshFallbackAndLargeFile()
+    {
+        QString executable = QCoreApplication::applicationDirPath() + "/nya_tree_sitter_tests";
+#ifdef Q_OS_WIN
+        executable += ".exe";
+#endif
+        Editor editor; editor.setDark(true); editor.setLanguage("cpp");
+        editor.setPlainText(QStringLiteral("int 中文😀 = 3;\nreturn 0;")); editor.document()->setModified(false);
+        auto firstColor = [&] {
+            const auto formats = editor.document()->firstBlock().layout()->formats();
+            for (const auto &format : formats) if (format.start == 0) return format.format.foreground().color();
+            return QColor();
+        };
+        QSignalSpy status(&editor, &Editor::languageStatusChanged);
+        LanguageSettings settings{true, executable, {}}; editor.setLanguageSettings(settings);
+        QTRY_COMPARE(firstColor(), QColor("#a4d7a0")); QVERIFY(!editor.dirty()); QVERIFY(status.count() >= 1);
+        const auto count = status.count(); QTest::qWait(650); QCOMPARE(status.count(), count); // Formatting must not re-launch the CLI.
+        editor.setDark(false); QCOMPARE(firstColor(), QColor("#368650"));
+        editor.moveCursor(QTextCursor::End); editor.insertPlainText("\n// unsaved");
+        QTRY_VERIFY(editor.treeSitterStatus().state == TreeSitterState::Working); QCOMPARE(firstColor(), QColor("#368650"));
+        settings.configPath = "slow"; editor.setLanguageSettings(settings); QTest::qWait(350);
+        settings.treeSitterEnabled = false; editor.setLanguageSettings(settings);
+        QCOMPARE(firstColor(), QColor("#8253bb")); QTest::qWait(900); QCOMPARE(firstColor(), QColor("#8253bb"));
+        settings.treeSitterEnabled = true; settings.configPath = "fail"; editor.setLanguageSettings(settings);
+        const auto beforeFailure = status.count(); QTRY_VERIFY(status.count() > beforeFailure);
+        QCOMPARE(firstColor(), QColor("#8253bb"));
+        editor.largeFile = true; editor.setLanguage("cpp"); settings.configPath.clear(); editor.setLanguageSettings(settings);
+        const auto beforeLarge = status.count(); QTest::qWait(600); QCOMPARE(status.count(), beforeLarge);
+        QVERIFY(editor.document()->firstBlock().layout()->formats().isEmpty());
+    }
     void roundedMenusHaveTransparentCornersAndWorkingActions()
     {
         for (bool dark : {true, false}) {

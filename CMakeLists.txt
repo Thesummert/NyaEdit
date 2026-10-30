@@ -17,6 +17,7 @@ add_library(nya_core STATIC
     src/core/FileIO.cpp src/core/FileIO.h
     src/core/FileSearch.cpp src/core/FileSearch.h
     src/core/Search.cpp src/core/Search.h)
+target_sources(nya_core PRIVATE src/core/TreeSitter.cpp src/core/TreeSitter.h)
 target_include_directories(nya_core PUBLIC src/core)
 target_link_libraries(nya_core PUBLIC Qt${QT_VERSION_MAJOR}::Core ICU::uc ICU::i18n)
 
@@ -28,6 +29,7 @@ add_library(nya_widgets STATIC
     src/ui/FileTreeView.cpp src/ui/FileTreeView.h
     src/ui/FontSettingsDialog.cpp src/ui/FontSettingsDialog.h
     src/ui/Highlighter.cpp src/ui/Highlighter.h
+    src/ui/LanguageSettingsDialog.cpp src/ui/LanguageSettingsDialog.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/WelcomePage.cpp src/ui/WelcomePage.h
     src/ui/Theme.cpp src/ui/Theme.h)
@@ -69,15 +71,20 @@ if(BUILD_TESTING)
     target_link_libraries(nya_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
     add_executable(nya_storage_tests tests/StorageTests.cpp)
     target_link_libraries(nya_storage_tests PRIVATE nya_core Qt${QT_VERSION_MAJOR}::Test)
+    add_executable(nya_tree_sitter_tests tests/TreeSitterTests.cpp)
+    target_link_libraries(nya_tree_sitter_tests PRIVATE nya_core Qt${QT_VERSION_MAJOR}::Test)
+    add_dependencies(nya_ui_tests nya_tree_sitter_tests)
     if(MSVC)
         target_compile_options(nya_tests PRIVATE /utf-8)
         target_compile_options(nya_ui_tests PRIVATE /utf-8)
         target_compile_options(nya_storage_tests PRIVATE /utf-8)
+        target_compile_options(nya_tree_sitter_tests PRIVATE /utf-8)
     endif()
     add_test(NAME nya_tests COMMAND nya_tests)
     add_test(NAME nya_ui_tests COMMAND nya_ui_tests -platform offscreen)
     add_test(NAME nya_storage_tests COMMAND nya_storage_tests)
-    set_tests_properties(nya_tests nya_ui_tests nya_storage_tests PROPERTIES TIMEOUT 90)
+    add_test(NAME nya_tree_sitter_tests COMMAND nya_tree_sitter_tests)
+    set_tests_properties(nya_tests nya_ui_tests nya_storage_tests nya_tree_sitter_tests PROPERTIES TIMEOUT 90)
 endif()
 
 option(NYA_BUILD_TOOLS "Build preview and performance measurement tools" OFF)

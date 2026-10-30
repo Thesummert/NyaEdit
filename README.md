@@ -120,6 +120,17 @@ cmake --build build --parallel
 
 将示例中的 vcpkg 路径替换为你的安装路径。若使用 Qt 官方安装包，通过 `-DCMAKE_PREFIX_PATH="Qt安装目录;ICU安装目录"` 指定依赖。编译器、Qt、ICU 和目标架构必须匹配。
 
+### Windows 安装包
+
+使用 x64 Visual Studio 开发者命令提示符，并安装 NSIS 3。先按上面的说明配置 Release 构建目录，然后在 PowerShell 中执行：
+
+`powershell
+.\packaging\build-windows.ps1 -BuildDir build/windows-compatible 
+  -QtBin C:/Qt/6.8.3/msvc2022_64/bin -IcuBin C:/vcpkg/installed/x64-windows/bin
+`
+
+将路径换成实际位置；脚本构建程序并收集 Qt、ICU 和 MSVC 运行库，生成 uild/windows-compatible/NyaEdit-0.1.0-Setup.exe。安装程序默认安装到当前用户目录，提供开始菜单快捷方式和卸载入口。打包脚本需要与项目构建架构匹配的 x64 MSVC、Qt 和 ICU；安装包未经过数字签名。
+
 ### 测试
 
 默认启用测试，可用 `-DBUILD_TESTING=OFF` 关闭。

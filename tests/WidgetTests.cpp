@@ -7,6 +7,9 @@
 #include "FileTreeView.h"
 #include "MainWindow.h"
 #include "WelcomePage.h"
+#include "TaskConfiguration.h"
+#include "TaskPanel.h"
+#include "TaskRunner.h"
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
@@ -14,6 +17,7 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QDialogButtonBox>
+#include <QDockWidget>
 #include <QFile>
 #include <QFileSystemModel>
 #include <QFontComboBox>
@@ -21,6 +25,8 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLabel>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QMessageBox>
 #include <QMenu>
 #include <QMenuBar>
@@ -54,10 +60,36 @@ protected:
     void revealInFileManager(const QString &path) override { revealedPaths.append(path); }
 };
 
+class TerminalTestWindow : public MainWindow {
+public:
+    using MainWindow::MainWindow;
+    QStringList terminalDirectories;
+protected:
+    void openInTerminal(const QString &directory) override { terminalDirectories.append(directory); }
+};
+
 class WidgetTests : public QObject {
     Q_OBJECT
     QTemporaryDir m_settings;
     StoragePaths testPaths() const { return StoragePaths::underDirectory(m_settings.filePath(QString::fromLatin1(QTest::currentTestFunction()))); }
+    static QJsonObject fixtureTask(const QString &label, const QString &mode, const QStringList &args = {})
+    {
+        QString program = QCoreApplication::applicationDirPath() + "/nya_task_tests";
+#ifdef Q_OS_WIN
+        program += ".exe";
+#endif
+        return {{"label", label}, {"type", "process"}, {"command", program},
+            {"args", QJsonArray::fromStringList(QStringList{"--task-fixture", mode} + args)},
+            {"group", QJsonObject{{"kind", "build"}, {"isDefault", true}}}};
+    }
+    static bool writeTaskConfig(const QString &root, const QJsonArray &tasks)
+    {
+        const auto path = TaskConfiguration::filePath(root);
+        if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
+        QFile file(path); if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+        const auto json = QJsonDocument(QJsonObject{{"version", "2.0.0"}, {"tasks", tasks}}).toJson();
+        return file.write(json) == json.size();
+    }
     struct ContextAction {
         bool shown = false;
         bool enabled = false;
@@ -84,6 +116,115 @@ class WidgetTests : public QObject {
         return result;
     }
 private slots:
+    void runMenuOpensTerminalInProjectOrFileDirectory()
+    {
+        QTemporaryDir project, files;
+        TerminalTestWindow window(nullptr, testPaths());
+        auto *action = window.findChild<QAction *>("actionOpenInTerminal"); QVERIFY(action); QVERIFY(action->isEnabled());
+        auto *run = window.findChild<QMenu *>("runMenu"); QVERIFY(run->actions().contains(action));
+        action->trigger(); QCOMPARE(window.terminalDirectories.last(), QFileInfo(QDir::homePath()).canonicalFilePath());
+        const auto path = files.filePath(QStringLiteral("文件 空格 ' $;.txt"));
+        { QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("hello"); }
+        window.openPath(path); action->trigger(); QCOMPARE(window.terminalDirectories.last(), QFileInfo(files.path()).canonicalFilePath());
+        auto *editor = qobject_cast<Editor *>(window.findChild<QTabWidget *>()->currentWidget()); QTRY_VERIFY(!editor->loading);
+        window.openFolder(project.path()); action->trigger(); QCOMPARE(window.terminalDirectories.last(), QFileInfo(project.path()).canonicalFilePath());
+        QVERIFY(writeTaskConfig(project.path(), {fixtureTask("long", "slow")}));
+        auto *runner = window.findChild<TaskRunner *>(); QSignalSpy done(runner, &TaskRunner::finished);
+        window.findChild<QAction *>("actionBuildTask")->trigger(); QVERIFY(runner->isRunning());
+        QVERIFY(action->isEnabled()); action->trigger(); QCOMPARE(window.terminalDirectories.last(), QFileInfo(project.path()).canonicalFilePath());
+        runner->stop(); QTRY_COMPARE(done.count(), 1); QVERIFY(done.first().at(1).toBool());
+    }
+    void configureProjectTasksCreatesAndPreservesConfig()
+    {
+        QTemporaryDir project;
+        MainWindow window(nullptr, testPaths()); window.openFolder(project.path());
+        auto *configure = window.findChild<QAction *>("actionConfigureTasks"); QVERIFY(configure);
+        configure->trigger();
+        const auto path = TaskConfiguration::filePath(project.path());
+        QVERIFY(QFileInfo::exists(path)); QVERIFY(TaskConfiguration::load(project.path()).ok());
+        auto *tabs = window.findChild<QTabWidget *>(); QCOMPARE(tabs->count(), 1);
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget()); QTRY_VERIFY(!editor->loading);
+        QCOMPARE(editor->path, QFileInfo(path).canonicalFilePath()); QVERIFY(!editor->dirty());
+        const auto original = editor->contents(); configure->trigger(); QCOMPARE(tabs->count(), 1);
+        QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(QString::fromUtf8(file.readAll()), original);
+    }
+    void taskMenuRunsBuildReloadsAndShowsOutput()
+    {
+        QTemporaryDir project, other;
+        auto task = fixtureTask("build", "echo", {QStringLiteral("中文 😀"), "first"});
+        task.insert("options", QJsonObject{{"env", QJsonObject{{"NYA_TASK_TEST", "from-project"}}}});
+        QVERIFY(writeTaskConfig(project.path(), {task}));
+        MainWindow window(nullptr, testPaths()); window.openFolder(project.path()); window.show();
+        auto *runner = window.findChild<TaskRunner *>(); auto *dock = window.findChild<QDockWidget *>("taskDock");
+        auto *output = window.findChild<QPlainTextEdit *>("taskOutput"); QVERIFY(runner); QVERIFY(output->isReadOnly());
+        auto *build = window.findChild<QAction *>("actionBuildTask"); auto *run = window.findChild<QAction *>("actionRunTask");
+        auto *stop = window.findChild<QAction *>("actionStopTask"); auto *repeat = window.findChild<QAction *>("actionRepeatTask");
+        QVERIFY(!repeat->isEnabled()); QVERIFY(!stop->isEnabled()); QVERIFY(dock->isHidden());
+        QSignalSpy done(runner, &TaskRunner::finished); build->trigger();
+        QVERIFY(runner->isRunning()); QVERIFY(!run->isEnabled()); QVERIFY(stop->isEnabled()); QVERIFY(!dock->isHidden());
+        QTRY_COMPARE(done.count(), 1); QCOMPARE(done.first().at(0).toInt(), 0);
+        QVERIFY(output->toPlainText().contains(QStringLiteral("中文 😀"))); QVERIFY(output->toPlainText().contains("from-project"));
+        QVERIFY(output->toPlainText().contains("stderr-visible")); QVERIFY(run->isEnabled()); QVERIFY(repeat->isEnabled()); QVERIFY(!stop->isEnabled());
+        const auto text = output->toPlainText(); window.findChild<QAction *>("actionTheme")->trigger(); QCOMPARE(output->toPlainText(), text);
+        task.insert("args", QJsonArray{"--task-fixture", "echo", "reloaded"}); QVERIFY(writeTaskConfig(project.path(), {task}));
+        repeat->trigger(); QTRY_COMPARE(done.count(), 2); QVERIFY(output->toPlainText().contains("reloaded")); QVERIFY(!output->toPlainText().contains("first"));
+        auto *menu = window.findChild<QMenu *>("projectTasksMenu"); QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+        QCOMPARE(menu->actions().size(), 1); QCOMPARE(menu->actions().first()->data().toString(), QString("build"));
+        menu->actions().first()->trigger(); QTRY_COMPARE(done.count(), 3);
+        window.openFolder(other.path()); QVERIFY(!repeat->isEnabled());
+    }
+    void taskVariablesAndInvalidConfigDoNotRunPartialPlans()
+    {
+        QTemporaryDir project;
+        const auto sentinel = project.filePath("sentinel");
+        auto first = fixtureTask("prepare", "write", {sentinel}); first.remove("group");
+        auto build = fixtureTask("build", "echo", {"${file}"}); build.insert("dependsOn", "prepare");
+        QVERIFY(writeTaskConfig(project.path(), {first, build}));
+        MainWindow window(nullptr, testPaths()); window.openFolder(project.path());
+        auto *runner = window.findChild<TaskRunner *>(); QSignalSpy done(runner, &TaskRunner::finished);
+        auto *output = window.findChild<QPlainTextEdit *>("taskOutput");
+        window.findChild<QAction *>("actionBuildTask")->trigger();
+        QTRY_COMPARE(done.count(), 1); QVERIFY(!runner->isRunning()); QVERIFY(!QFileInfo::exists(sentinel)); QVERIFY(output->toPlainText().contains("${file}"));
+        const auto source = project.filePath(QStringLiteral("当前 文档.txt"));
+        { QFile file(source); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("hello"); }
+        window.openPath(source);
+        auto *editor = qobject_cast<Editor *>(window.findChild<QTabWidget *>()->currentWidget()); QTRY_VERIFY(!editor->loading);
+        window.findChild<QAction *>("actionBuildTask")->trigger(); QTRY_COMPARE(done.count(), 2);
+        QCOMPARE(done.last().at(0).toInt(), 0); QVERIFY(QFileInfo::exists(sentinel)); QVERIFY(output->toPlainText().contains(source));
+        { QFile file(TaskConfiguration::filePath(project.path())); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write("{\n broken"); }
+        window.findChild<QAction *>("actionBuildTask")->trigger(); QVERIFY(!runner->isRunning()); QCOMPARE(done.count(), 2);
+        QVERIFY(output->toPlainText().contains(QStringLiteral("第 2 行")));
+        auto *menu = window.findChild<QMenu *>("projectTasksMenu"); QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+        QCOMPARE(menu->actions().size(), 1); QVERIFY(!menu->actions().first()->isEnabled());
+    }
+    void taskOutputCanHideAndStopAcrossProjectChanges()
+    {
+        QTemporaryDir project, other;
+        QVERIFY(writeTaskConfig(project.path(), {fixtureTask("long", "slow")}));
+        QVERIFY(writeTaskConfig(other.path(), {fixtureTask("long", "slow")}));
+        MainWindow window(nullptr, testPaths()); window.openFolder(project.path()); window.show();
+        auto *runner = window.findChild<TaskRunner *>(); QSignalSpy done(runner, &TaskRunner::finished);
+        auto *output = window.findChild<QPlainTextEdit *>("taskOutput");
+        window.findChild<QAction *>("actionBuildTask")->trigger(); QTRY_VERIFY(output->toPlainText().contains("ready\n"));
+        auto *toggle = window.findChild<QAction *>("actionTaskOutput"); toggle->trigger();
+        QVERIFY(window.findChild<QDockWidget *>("taskDock")->isHidden()); QVERIFY(runner->isRunning());
+        window.openFolder(other.path()); QVERIFY(runner->isRunning());
+        QVERIFY(window.findChild<QLabel *>("taskTitle")->text().contains(project.path()));
+        toggle->trigger(); window.findChild<QToolButton *>("taskStop")->click(); QTRY_COMPARE(done.count(), 1);
+        QVERIFY(done.first().at(1).toBool()); QVERIFY(!window.findChild<QAction *>("actionRepeatTask")->isEnabled());
+        done.clear(); window.findChild<QAction *>("actionBuildTask")->trigger(); QTRY_VERIFY(output->toPlainText().contains("ready\n"));
+        QVERIFY(window.close()); QTRY_COMPARE(done.count(), 1); QVERIFY(done.first().at(1).toBool());
+    }
+    void taskPanelBoundsOutputAndStripsStreamingControlSequences()
+    {
+        TaskPanel panel;
+        auto *output = panel.findChild<QPlainTextEdit *>("taskOutput");
+        panel.appendOutput("A\033[3"); panel.appendOutput("1mRED\033[0m\033]0;title\007Z\r"); panel.appendOutput("\nline\n"); panel.flush();
+        QCOMPARE(output->toPlainText(), QString("AREDZ\nline\n"));
+        panel.findChild<QToolButton *>("taskClearOutput")->click(); QVERIFY(output->toPlainText().isEmpty());
+        panel.appendOutput(QString(2 * 1024 * 1024, 'x') + "tail"); panel.flush();
+        QVERIFY(output->toPlainText().size() <= 1024 * 1024); QVERIFY(output->toPlainText().endsWith("tail"));
+    }
     void backgroundGaussianAndOpacityArePainted()
     {
         QTemporaryDir fixture;

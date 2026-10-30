@@ -16,6 +16,18 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/core/CMakeLists.txt")
 endif()
 add_subdirectory(src/core)
 
+# Project task orchestration belongs to the application, independently of the core submodule.
+add_library(nya_tasks STATIC
+    src/tasks/TaskConfiguration.cpp src/tasks/TaskConfiguration.h
+    src/tasks/TaskRunner.cpp src/tasks/TaskRunner.h)
+target_include_directories(nya_tasks PUBLIC src/tasks)
+target_link_libraries(nya_tasks PUBLIC Qt${QT_VERSION_MAJOR}::Core)
+if(MSVC)
+    target_compile_options(nya_tasks PRIVATE /W4 /utf-8)
+else()
+    target_compile_options(nya_tasks PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(nya_widgets STATIC
     assets/icons.qrc
     src/ui/Animation.cpp src/ui/Animation.h
@@ -28,10 +40,11 @@ add_library(nya_widgets STATIC
     src/ui/Highlighter.cpp src/ui/Highlighter.h
     src/ui/LanguageSettingsDialog.cpp src/ui/LanguageSettingsDialog.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
+    src/ui/TaskPanel.cpp src/ui/TaskPanel.h
     src/ui/WelcomePage.cpp src/ui/WelcomePage.h
     src/ui/Theme.cpp src/ui/Theme.h)
 target_include_directories(nya_widgets PUBLIC src/ui)
-target_link_libraries(nya_widgets PUBLIC nya_core Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg)
+target_link_libraries(nya_widgets PUBLIC nya_core nya_tasks Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg)
 
 add_executable(NyaEdit MACOSX_BUNDLE WIN32 src/main.cpp)
 target_link_libraries(NyaEdit PRIVATE nya_widgets)
@@ -59,11 +72,16 @@ endif()
 
 if(BUILD_TESTING)
     find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
+    add_executable(nya_task_tests tests/TaskTests.cpp)
+    target_link_libraries(nya_task_tests PRIVATE nya_tasks Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME nya_task_tests COMMAND nya_task_tests)
+    set_tests_properties(nya_task_tests PROPERTIES TIMEOUT 60)
     add_executable(nya_ui_tests tests/WidgetTests.cpp)
     target_link_libraries(nya_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
-    add_dependencies(nya_ui_tests nya_tree_sitter_tests)
+    add_dependencies(nya_ui_tests nya_tree_sitter_tests nya_task_tests)
     if(MSVC)
         target_compile_options(nya_ui_tests PRIVATE /utf-8)
+        target_compile_options(nya_task_tests PRIVATE /utf-8)
     endif()
     add_test(NAME nya_ui_tests COMMAND nya_ui_tests -platform offscreen)
     set_tests_properties(nya_ui_tests PROPERTIES TIMEOUT 90)

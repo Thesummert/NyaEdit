@@ -11,6 +11,7 @@
 class QAction;
 class QCloseEvent;
 class QComboBox;
+class QDockWidget;
 class QFileSystemModel;
 class QFrame;
 class QLabel;
@@ -28,6 +29,8 @@ namespace nya {
 class Editor;
 class EditorBackground;
 class FileTreeView;
+class TaskPanel;
+class TaskRunner;
 class WelcomePage;
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -44,12 +47,22 @@ protected:
     void dropEvent(QDropEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     virtual void revealInFileManager(const QString &path);
+    virtual void openInTerminal(const QString &directory);
 private:
     void setupMenus();
     void setupToolbar();
     void setupWorkspace();
     void setupSearch();
     void setupStatus();
+    void setupTasks();
+    void chooseTask();
+    void runTask(const QString &label);
+    void runBuildTask();
+    void configureTasks();
+    void openProjectTerminal();
+    void rebuildTasksMenu();
+    void updateTaskActions();
+    void reportTaskError(const QString &error);
     Editor *current() const;
     Editor *addEditor(const QString &name);
     void chooseFiles(const QString &encoding = {});
@@ -122,6 +135,16 @@ private:
     quint64 m_fileSearchGeneration = 0;
     std::shared_ptr<std::atomic_bool> m_fileSearchCancel;
     QMenu *m_recent = nullptr;
+    QMenu *m_tasksMenu = nullptr;
+    QDockWidget *m_taskDock = nullptr;
+    TaskPanel *m_taskPanel = nullptr;
+    TaskRunner *m_taskRunner = nullptr;
+    QAction *m_runTaskAction = nullptr;
+    QAction *m_buildTaskAction = nullptr;
+    QAction *m_repeatTaskAction = nullptr;
+    QAction *m_stopTaskAction = nullptr;
+    QString m_lastTaskLabel;
+    QString m_lastTaskRoot;
     QFrame *m_searchPanel = nullptr;
     QWidget *m_replaceRow = nullptr;
     QLineEdit *m_find = nullptr;

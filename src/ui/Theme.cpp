@@ -159,6 +159,10 @@ void Theme::apply(QApplication &app, bool dark)
         QPlainTextEdit { background: %1; border: none; padding: 8px 0; }
         QPlainTextEdit#editor { background: transparent; }
         QPlainTextEdit#fontPreview { border: 1px solid %4; border-radius: 6px; padding: 10px; }
+        QDockWidget { color: %5; }
+        QDockWidget::title { background: %2; padding: 6px 12px; }
+        QWidget#taskPanel { background: %1; }
+        QPlainTextEdit#taskOutput { padding: 4px; selection-background-color: %8; selection-color: white; }
         QFrame#sidebar { background: %2; border-right: 1px solid %4; }
         QLabel#sectionLabel { color: %6; font-size: 11px; font-weight: 600; padding: 14px 14px 6px; }
         QLabel#brand { color: %5; font-size: 19px; font-weight: 700; padding-right: 12px; }

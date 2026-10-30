@@ -8,6 +8,9 @@
 #include "BackgroundSettingsDialog.h"
 #include "LanguageSettingsDialog.h"
 #include "Theme.h"
+#include "TaskConfiguration.h"
+#include "TaskPanel.h"
+#include "TaskRunner.h"
 #include "WelcomePage.h"
 
 #include <QAction>
@@ -15,8 +18,10 @@
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDockWidget>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
@@ -42,6 +47,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextBlock>
@@ -54,6 +60,11 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cmath>
+#ifdef Q_OS_WIN
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace nya {
 namespace {
@@ -94,7 +105,7 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     Theme::apply(*qApp, m_dark);
     m_searchTimer = new QTimer(this); m_searchTimer->setSingleShot(true); m_searchTimer->setInterval(180);
     connect(m_searchTimer, &QTimer::timeout, this, &MainWindow::refreshSearch);
-    setupWorkspace(); setupMenus(); setupToolbar(); setupStatus();
+    setupWorkspace(); setupTasks(); setupMenus(); setupToolbar(); setupStatus();
     connect(m_background, &EditorBackground::changed, this, &MainWindow::updateBackgroundSurface);
     connect(m_background, &EditorBackground::fileUnavailable, this, [this] {
         m_storage->setValue("background/path", QString());
@@ -151,12 +162,14 @@ void MainWindow::updateBackgroundSurface()
             QTabWidget, QTabBar, QTabBar::tab, QTabBar::tab:selected,
             QStackedWidget, QWidget#welcomePage, QFrame#sidebar, QFrame#searchPanel,
             QListWidget, QTreeView,
-            QLineEdit#fileSearchInput, QLineEdit#findInput, QLineEdit#replaceInput {
+            QLineEdit#fileSearchInput, QLineEdit#findInput, QLineEdit#replaceInput,
+            QDockWidget::title, QWidget#taskPanel, QPlainTextEdit#taskOutput {
                 background: transparent;
             }
         )") : QString());
         // Applying a stylesheet can restore Qt's cached inherited font.
         for (int i = 0; i < m_tabs->count(); ++i) qobject_cast<Editor *>(m_tabs->widget(i))->setDark(m_dark);
+        m_taskPanel->refreshFont();
     }
     update();
 }
@@ -383,6 +396,25 @@ void MainWindow::setupMenus()
     view->addAction(QStringLiteral("下一个标签页"), this, [this] { if (m_tabs->count()) { m_tabs->setCurrentIndex((m_tabs->currentIndex() + 1) % m_tabs->count()); updateWorkspacePage(); } }, QKeySequence(QStringLiteral("Ctrl+Tab")));
     view->addAction(QStringLiteral("上一个标签页"), this, [this] { if (m_tabs->count()) { m_tabs->setCurrentIndex((m_tabs->currentIndex() + m_tabs->count() - 1) % m_tabs->count()); updateWorkspacePage(); } }, QKeySequence(QStringLiteral("Ctrl+Shift+Tab")));
 
+    auto *run = menuBar()->addMenu(QStringLiteral("运行(&R)")); run->setObjectName("runMenu");
+    m_runTaskAction = run->addAction(QStringLiteral("运行任务…"), this, &MainWindow::chooseTask, QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    m_runTaskAction->setObjectName("actionRunTask");
+    m_buildTaskAction = run->addAction(QStringLiteral("运行构建任务"), this, &MainWindow::runBuildTask, QKeySequence(QStringLiteral("Ctrl+Shift+B")));
+    m_buildTaskAction->setObjectName("actionBuildTask");
+    m_repeatTaskAction = run->addAction(QStringLiteral("重新运行上次任务"), this, [this] { runTask(m_lastTaskLabel); }, QKeySequence(QStringLiteral("Ctrl+Alt+R")));
+    m_repeatTaskAction->setObjectName("actionRepeatTask");
+    m_stopTaskAction = run->addAction(QStringLiteral("停止任务"), this, [this] { m_taskRunner->stop(); }, QKeySequence(QStringLiteral("Ctrl+Shift+F5")));
+    m_stopTaskAction->setObjectName("actionStopTask"); run->addSeparator();
+    m_tasksMenu = run->addMenu(QStringLiteral("项目任务")); m_tasksMenu->setObjectName("projectTasksMenu");
+    connect(m_tasksMenu, &QMenu::aboutToShow, this, &MainWindow::rebuildTasksMenu);
+    auto *configure = run->addAction(QStringLiteral("配置任务…"), this, &MainWindow::configureTasks); configure->setObjectName("actionConfigureTasks");
+    configure->setToolTip(QStringLiteral("打开项目 .ne/task.json；文件不存在时创建示例，不覆盖已有配置"));
+    auto *terminal = run->addAction(QStringLiteral("在终端中打开"), this, &MainWindow::openProjectTerminal);
+    terminal->setObjectName("actionOpenInTerminal");
+    terminal->setToolTip(QStringLiteral("在系统终端中打开当前项目目录；没有项目时使用当前文件目录"));
+    run->addSeparator();
+    run->addAction(m_taskDock->toggleViewAction()); updateTaskActions();
+
     auto *settings = menuBar()->addMenu(QStringLiteral("设置(&T)"));
     auto *fontSettings = settings->addAction(QStringLiteral("字体与字号…"), this, &MainWindow::chooseEditorFont);
     fontSettings->setObjectName("actionFontSettings");
@@ -499,6 +531,157 @@ void MainWindow::setupStatus()
     connect(m_zoom, &QToolButton::clicked, this, [this] { if (current()) current()->setFontSize(13); });
     statusBar()->addPermanentWidget(m_position); statusBar()->addPermanentWidget(m_encoding);
     statusBar()->addPermanentWidget(m_ending); statusBar()->addPermanentWidget(m_zoom);
+}
+
+void MainWindow::setupTasks()
+{
+    m_taskRunner = new TaskRunner(this); m_taskRunner->setObjectName("taskRunner");
+    m_taskDock = new QDockWidget(QStringLiteral("任务输出"), this); m_taskDock->setObjectName("taskDock");
+    m_taskDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    m_taskDock->setFeatures(QDockWidget::DockWidgetClosable);
+    m_taskPanel = new TaskPanel; m_taskPanel->setMinimumHeight(150); m_taskDock->setWidget(m_taskPanel);
+    addDockWidget(Qt::BottomDockWidgetArea, m_taskDock); m_taskDock->hide();
+    m_taskDock->toggleViewAction()->setObjectName("actionTaskOutput");
+    connect(m_taskPanel, &TaskPanel::stopRequested, m_taskRunner, &TaskRunner::stop);
+    connect(m_taskRunner, &TaskRunner::output, m_taskPanel, &TaskPanel::appendOutput);
+    connect(m_taskRunner, &TaskRunner::runningChanged, this, [this](bool running) {
+        m_taskPanel->setRunning(running); updateTaskActions();
+    });
+    connect(m_taskRunner, &TaskRunner::finished, this, [this](int code, bool canceled) {
+        statusBar()->showMessage(canceled ? QStringLiteral("任务已停止") : code == 0 ? QStringLiteral("任务完成")
+            : QStringLiteral("任务失败 · 退出码 %1").arg(code), 6000);
+    });
+}
+
+void MainWindow::updateTaskActions()
+{
+    if (!m_runTaskAction) return;
+    const bool running = m_taskRunner->isRunning();
+    m_runTaskAction->setEnabled(!running); m_buildTaskAction->setEnabled(!running);
+    m_repeatTaskAction->setEnabled(!running && !m_lastTaskLabel.isEmpty() && m_lastTaskRoot == m_folderRoot);
+    m_stopTaskAction->setEnabled(running); m_tasksMenu->setEnabled(!running);
+}
+
+void MainWindow::reportTaskError(const QString &error)
+{
+    m_taskDock->show(); m_taskDock->raise();
+    if (!m_taskRunner->isRunning()) m_taskPanel->beginTask(QStringLiteral("任务配置 / 执行错误"), m_folderRoot);
+    m_taskPanel->appendOutput(error + '\n'); m_taskPanel->flush();
+    statusBar()->showMessage(error, 10000);
+}
+
+void MainWindow::rebuildTasksMenu()
+{
+    m_tasksMenu->clear();
+    const auto info = [this](const QString &text) { auto *action = m_tasksMenu->addAction(text); action->setEnabled(false); };
+    if (m_folderRoot.isEmpty()) { info(QStringLiteral("请先打开项目文件夹")); return; }
+    const auto config = TaskConfiguration::load(m_folderRoot);
+    if (!config.ok()) { info(QStringLiteral("任务配置不可用，请使用“配置任务…”")); m_tasksMenu->setToolTip(config.error); return; }
+    m_tasksMenu->setToolTip(TaskConfiguration::filePath(m_folderRoot));
+    if (config.tasks.isEmpty()) { info(QStringLiteral("task.json 中尚无任务")); return; }
+    for (const auto &task : config.tasks) {
+        auto *action = m_tasksMenu->addAction(task.label, this, [this, label = task.label] { runTask(label); });
+        action->setObjectName("projectTaskAction"); action->setData(task.label);
+        action->setToolTip(task.detail.isEmpty() ? task.command : task.detail);
+    }
+}
+
+void MainWindow::chooseTask()
+{
+    if (m_folderRoot.isEmpty()) openFolder();
+    if (m_folderRoot.isEmpty()) return;
+    const auto config = TaskConfiguration::load(m_folderRoot);
+    if (!config.ok()) { reportTaskError(config.error); return; }
+    QStringList labels; for (const auto &task : config.tasks) labels.append(task.label);
+    if (labels.isEmpty()) { reportTaskError(QStringLiteral(".ne/task.json 中没有任务，请通过“运行 → 配置任务…”添加。")); return; }
+    bool accepted = false;
+    const auto label = QInputDialog::getItem(this, QStringLiteral("运行项目任务"), QStringLiteral("选择任务"), labels, 0, false, &accepted);
+    if (accepted) runTask(label);
+}
+
+void MainWindow::runBuildTask()
+{
+    if (m_folderRoot.isEmpty()) openFolder();
+    if (m_folderRoot.isEmpty()) return;
+    const auto config = TaskConfiguration::load(m_folderRoot);
+    if (!config.ok()) { reportTaskError(config.error); return; }
+    const auto label = config.defaultBuildTask();
+    if (label.isEmpty()) { reportTaskError(QStringLiteral("没有构建任务。请在 task.json 中设置 group 为 build。")); return; }
+    runTask(label);
+}
+
+void MainWindow::runTask(const QString &label)
+{
+    if (m_taskRunner->isRunning()) { statusBar()->showMessage(QStringLiteral("已有任务正在运行，请先停止或等待完成。"), 5000); return; }
+    if (m_folderRoot.isEmpty()) { reportTaskError(QStringLiteral("请先打开项目文件夹。")); return; }
+    const auto config = TaskConfiguration::load(m_folderRoot);
+    if (!config.ok()) { reportTaskError(config.error); return; }
+    TaskContext context; context.workspaceFolder = m_folderRoot;
+    if (current()) context.file = current()->path;
+    m_taskPanel->beginTask(label, m_folderRoot); m_taskDock->show(); m_taskDock->raise();
+    m_lastTaskLabel = label; m_lastTaskRoot = m_folderRoot;
+    m_taskRunner->start(config, label, context); updateTaskActions();
+}
+
+void MainWindow::openProjectTerminal()
+{
+    QString directory = m_folderRoot;
+    if (directory.isEmpty() && current() && !current()->path.isEmpty()) directory = QFileInfo(current()->path).absolutePath();
+    if (directory.isEmpty()) directory = QDir::homePath();
+    if (!QFileInfo(directory).isDir()) {
+        QMessageBox::warning(this, QStringLiteral("打开终端失败"), QStringLiteral("目录不存在：%1").arg(directory)); return;
+    }
+    openInTerminal(canonicalPath(directory));
+}
+
+void MainWindow::openInTerminal(const QString &directory)
+{
+    bool opened = false;
+#ifdef Q_OS_MAC
+    // Pass the directory as an argument; no generated shell/AppleScript source.
+    opened = QProcess::startDetached(QStringLiteral("/usr/bin/open"), {"-a", "Terminal", directory}, directory);
+#elif defined(Q_OS_WIN)
+    QProcess terminal;
+    terminal.setProgram(qEnvironmentVariable("COMSPEC", QStringLiteral("cmd.exe")));
+    terminal.setWorkingDirectory(directory);
+    terminal.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) {
+        args->flags |= CREATE_NEW_CONSOLE;
+        args->flags &= ~CREATE_NO_WINDOW;
+    });
+    opened = terminal.startDetached();
+#else
+    struct Terminal { QString program; QStringList arguments; };
+    const QVector<Terminal> terminals{
+        {"gnome-terminal", {"--working-directory", directory}},
+        {"konsole", {"--workdir", directory}},
+        {"xfce4-terminal", {"--working-directory", directory}},
+        {"mate-terminal", {"--working-directory", directory}},
+        {"x-terminal-emulator", {}}, {"xterm", {}}
+    };
+    for (const auto &terminal : terminals) {
+        const auto executable = QStandardPaths::findExecutable(terminal.program);
+        if (!executable.isEmpty() && QProcess::startDetached(executable, terminal.arguments, directory)) { opened = true; break; }
+    }
+#endif
+    if (opened) statusBar()->showMessage(QStringLiteral("已在终端中打开：%1").arg(directory), 5000);
+    else QMessageBox::warning(this, QStringLiteral("打开终端失败"), QStringLiteral("无法启动系统终端，请确认已安装可用的终端程序。"));
+}
+
+void MainWindow::configureTasks()
+{
+    if (m_folderRoot.isEmpty()) openFolder();
+    if (m_folderRoot.isEmpty()) return;
+    const auto path = TaskConfiguration::filePath(m_folderRoot);
+    if (!QFileInfo::exists(path)) {
+        if (!QDir().mkpath(QFileInfo(path).absolutePath())) { reportTaskError(QStringLiteral("无法创建 .ne 配置目录。")); return; }
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) { reportTaskError(QStringLiteral("无法创建 %1：%2").arg(path, file.errorString())); return; }
+        const auto contents = TaskConfiguration::templateContents();
+        if (file.write(contents) != contents.size() || !file.flush()) {
+            const auto error = file.errorString(); file.close(); file.remove(); reportTaskError(QStringLiteral("无法写入任务配置：%1").arg(error)); return;
+        }
+    }
+    openPath(path);
 }
 
 Editor *MainWindow::current() const
@@ -622,6 +805,7 @@ void MainWindow::openFolder(const QString &path)
     m_folderLabel->setText(QFileInfo(m_folderRoot).fileName()); m_folderLabel->setToolTip(m_folderRoot);
     m_fileSearchInput->setEnabled(true); scheduleFileSearch();
     m_sidebarAction->setChecked(true); m_storage->record(m_folderRoot, RecentKind::Folder);
+    updateTaskActions();
 }
 
 void MainWindow::focusFileSearch()
@@ -800,6 +984,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     for (int i = 0; i < m_tabs->count(); ++i) {
         if (!confirmDiscard(qobject_cast<Editor *>(m_tabs->widget(i)))) { event->ignore(); return; }
     }
+    m_taskRunner->stop();
     m_sidebarTransition->finish(); m_searchTransition->finish(); m_pageTransition->finish();
     m_storage->setValue("window/sidebarWidth", m_sidebarTransition->expandedExtent());
     m_storage->setValue("window/geometry", saveGeometry()); m_storage->setValue("window/splitter", m_splitter->saveState());
@@ -959,6 +1144,7 @@ void MainWindow::setDark(bool dark)
 {
     m_dark = dark; Theme::apply(*qApp, dark); m_storage->setValue("appearance/dark", dark);
     for (int i = 0; i < m_tabs->count(); ++i) qobject_cast<Editor *>(m_tabs->widget(i))->setDark(dark);
+    m_taskPanel->refreshFont();
 }
 
 QFont MainWindow::configuredEditorFont() const

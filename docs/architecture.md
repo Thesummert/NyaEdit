@@ -32,6 +32,8 @@ flowchart LR
 
 核心接口使用值类型、普通函数及 QObject 信号，不产生界面副作用。核心依赖 Qt Core 与 ICU，能够供 CLI、测试或其他原生前端复用。
 
+核心由独立仓库 `NyaEditCore` 维护，以 Git 子模块放在 `src/core`。其 CMake 配置负责构建 `nya_core` 和三组核心测试，既支持单独构建，也支持由父项目通过 `add_subdirectory(src/core)` 集成。父仓库只维护界面和界面集成测试；完整构建时仍会运行核心测试。
+
 ## 界面库 `nya_widgets`
 
 - `MainWindow` 管理用户交互：文件对话框、编码选择、标签与当前文档、保存确认、快捷键、最近记录和设置。通过 `AppStorage` 访问持久化数据，不直接操作配置文件。

@@ -30,7 +30,7 @@
 
 ```text
 src/
-├── core/                 # 后端：Qt Core + ICU，不依赖 Widgets
+├── core/                 # NyaEditCore Git 子模块：Qt Core + ICU，不依赖 Widgets
 │   ├── Encoding.*        # 编码检测、严格解码、严格编码
 │   ├── FileIO.*          # 文件加载、换行分析、原子保存
 │   ├── FileSearch.*      # 可取消的递归文件名 / 路径搜索
@@ -52,9 +52,20 @@ src/
 
 `nya_core` 和 `nya_widgets` 分别构建为独立静态库。UI 调用核心的普通数据接口，核心不会打开对话框或访问窗口。文件加载通过 `QtConcurrent` 调度，结果通过 `QFutureWatcher` 送回 UI。核心测试可以在没有 GUI 的环境下单独运行。详见 [架构说明](docs/architecture.md)。
 
+核心的源码、构建配置和测试位于 `src/core` 子模块，独立构建与复用方式见 [NyaEditCore](src/core/README.md)。父仓库的 `tests/` 保留界面集成测试。
+
 ## 构建
 
 需要 CMake ≥ 3.21、C++17 编译器、Qt ≥ 5.15（推荐 Qt 6）和 ICU ≥ 60。Qt 需要 **Widgets、Concurrent、Svg**，启用测试时还需要 **Test**。无需 Qt WebEngine 或 Qt Core5Compat。
+
+先递归克隆仓库以获取核心子模块：
+
+```sh
+git clone --recurse-submodules git@github.com:Thesummert/NyaEdit.git
+cd NyaEdit
+```
+
+已有克隆在构建前执行 `git submodule update --init --recursive`。更新父仓库后也用该命令同步到记录的核心版本。修改核心后，先在 `src/core` 内提交并推送，再在父仓库提交子模块指针的更新。
 
 ### macOS
 

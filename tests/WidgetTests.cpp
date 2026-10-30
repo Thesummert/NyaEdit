@@ -1,6 +1,7 @@
 #include "Editor.h"
 #include "FontSettingsDialog.h"
 #include "AnimationSettingsDialog.h"
+#include "BackgroundSettingsDialog.h"
 #include "LanguageSettingsDialog.h"
 #include "Theme.h"
 #include "FileTreeView.h"
@@ -22,7 +23,9 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPushButton>
+#include <QPainter>
 #include <QSettings>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -36,6 +39,7 @@
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QToolButton>
+#include <QToolBar>
 #include <QTreeView>
 #include <QtTest>
 #include <cmath>
@@ -80,6 +84,282 @@ class WidgetTests : public QObject {
         return result;
     }
 private slots:
+    void backgroundGaussianAndOpacityArePainted()
+    {
+        QTemporaryDir fixture;
+        const QString path = fixture.filePath(QStringLiteral("背景 图片.png"));
+        QImage source(128, 128, QImage::Format_ARGB32_Premultiplied); source.fill(Qt::black);
+        { QPainter painter(&source); painter.fillRect(64, 0, 64, 128, Qt::white); }
+        QVERIFY(source.save(path));
+        EditorBackground background;
+        const auto render = [&] {
+            QImage image(256, 128, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::black);
+            QPainter painter(&image); background.paint(painter, image.rect()); return image;
+        };
+        QVERIFY(background.setSettings({path, 100, 0}));
+        const auto sharp = render();
+        QCOMPARE(sharp.pixelColor(110, 64), QColor(Qt::black));
+        QCOMPARE(sharp.pixelColor(145, 64), QColor(Qt::white));
+        QVERIFY(background.setSettings({path, 100, 40}));
+        const auto blurred = render();
+        QVERIFY(blurred.pixelColor(120, 64).red() > sharp.pixelColor(120, 64).red() + 10);
+        QVERIFY(blurred.pixelColor(135, 64).red() < sharp.pixelColor(135, 64).red() - 10);
+        QVERIFY(background.setSettings({path, 25, 0}));
+        QVERIFY(qAbs(render().pixelColor(200, 64).red() - 64) <= 2);
+        QVERIFY(background.setSettings({path, 0, 0}));
+        QVERIFY(!background.isActive()); QCOMPARE(render().pixelColor(200, 64), QColor(Qt::black));
+    }
+    void backgroundStaysFixedWhileEditingAndSwitchingThemes()
+    {
+        QTemporaryDir fixture;
+        const QString path = fixture.filePath("gradient.png");
+        QImage source(256, 256, QImage::Format_RGB32);
+        for (int y = 0; y < source.height(); ++y)
+            for (int x = 0; x < source.width(); ++x) source.setPixelColor(x, y, QColor(y, x, 100));
+        QVERIFY(source.save(path));
+        EditorBackground background; QVERIFY(background.setSettings({path, 100, 0}));
+        for (bool dark : {true, false}) {
+            Theme::apply(*qApp, dark);
+            Editor editor; editor.setDark(dark); editor.setBackground(&background); editor.resize(600, 320);
+            auto animations = editor.animationSettings(); animations.cursorEnabled = false; editor.setAnimationSettings(animations);
+            editor.setPlainText(QString("short text\n").repeated(200)); editor.document()->setModified(false); editor.show();
+            const auto sample = [&] {
+                const QImage image = editor.viewport()->grab().toImage();
+                return image.pixelColor(image.width() - 50, image.height() / 2);
+            };
+            const QColor initial = sample();
+            QVERIFY(initial != QColor(dark ? "#141820" : "#f5f7fa"));
+            QVERIFY(initial.red() > 30 && initial.red() < 220);
+            editor.verticalScrollBar()->setValue(80); QApplication::processEvents();
+            QCOMPARE(sample(), initial);
+            auto cursor = editor.textCursor(); cursor.setPosition(0); cursor.setPosition(5, QTextCursor::KeepAnchor); editor.setTextCursor(cursor);
+            const auto selected = editor.textCursor().selectedText();
+            QVERIFY(background.setSettings({path, 100, 20}));
+            QCOMPARE(editor.textCursor().selectedText(), selected); QVERIFY(!editor.dirty());
+            Theme::apply(*qApp, !dark); editor.setDark(!dark);
+            QCOMPARE(editor.textCursor().selectedText(), selected); QVERIFY(!editor.dirty());
+            const auto image = editor.viewport()->grab().toImage();
+            int highlighted = 0;
+            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
+                if (image.pixelColor(x, y).rgb() == editor.palette().color(QPalette::Highlight).rgb()) ++highlighted;
+            QVERIFY(highlighted > 100);
+            QVERIFY(background.setSettings({{}, 20, 0}));
+            QCOMPARE(sample(), QColor(!dark ? "#141820" : "#f5f7fa"));
+            QVERIFY(background.setSettings({path, 100, 0}));
+        }
+    }
+    void globalBackgroundCoversWindowWithContinuousCoordinates()
+    {
+        QTemporaryDir fixture;
+        QVERIFY(QDir().mkpath(fixture.filePath("folder")));
+        { QFile file(fixture.filePath("folder/child.txt")); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("hello"); }
+        const QString path = fixture.filePath("gradient.png");
+        QImage source(256, 256, QImage::Format_RGB32);
+        for (int y = 0; y < source.height(); ++y)
+            for (int x = 0; x < source.width(); ++x) source.setPixelColor(x, y, QColor(x, y, 180));
+        QVERIFY(source.save(path));
+        AppStorage storage(testPaths()); QVERIFY(storage.initialize(false));
+        QVERIFY(storage.setValue("animation/interface", false));
+        QVERIFY(storage.setValue("animation/cursor", false));
+        QVERIFY(storage.setValue("appearance/dark", true));
+        QVERIFY(storage.record(path, RecentKind::File));
+        MainWindow window(nullptr, testPaths()); window.show();
+        auto *background = window.findChild<EditorBackground *>(); QVERIFY(background);
+        QVERIFY(background->setSettings({path, 65, 0}));
+        auto *sidebar = window.findChild<QFrame *>("sidebar");
+        auto *welcome = window.findChild<WelcomePage *>();
+        auto *history = window.findChild<QListWidget *>("welcomeHistory");
+        bool dark = true;
+        // Compare UI pixels against a single image rendered across the entire window.
+        // This catches opaque panels, repeated pictures and local coordinate offsets.
+        const auto matchesWindow = [&](QWidget *widget, QPoint point) {
+            QApplication::processEvents();
+            const auto actual = window.grab();
+            QImage expected(actual.size(), QImage::Format_ARGB32_Premultiplied);
+            expected.setDevicePixelRatio(actual.devicePixelRatio());
+            expected.fill(QColor(dark ? "#141820" : "#f5f7fa"));
+            { QPainter painter(&expected); background->paint(painter, window.rect()); }
+            const QPoint pixel = widget->mapTo(&window, point) * actual.devicePixelRatio();
+            if (!actual.rect().contains(pixel)) return false;
+            const auto a = actual.toImage().pixelColor(pixel), b = expected.pixelColor(pixel);
+            return qAbs(a.red() - b.red()) <= 2 && qAbs(a.green() - b.green()) <= 2 && qAbs(a.blue() - b.blue()) <= 2;
+        };
+        for (int theme = 0; theme < 2; ++theme) {
+            QVERIFY(matchesWindow(window.menuBar(), QPoint(window.menuBar()->width() - 30, 10)));
+            auto *toolbar = window.findChild<QToolBar *>();
+            QVERIFY(matchesWindow(toolbar, QPoint(toolbar->width() / 2, toolbar->height() / 2)));
+            QVERIFY(matchesWindow(sidebar, QPoint(sidebar->width() / 2, sidebar->height() - 80)));
+            QVERIFY(matchesWindow(welcome, QPoint(welcome->width() - 25, welcome->height() - 30)));
+            QVERIFY(matchesWindow(history->viewport(), QPoint(history->viewport()->width() - 15, history->viewport()->height() - 15)));
+            QVERIFY(matchesWindow(window.statusBar(), QPoint(window.statusBar()->width() / 2, window.statusBar()->height() / 2)));
+            if (theme == 0) { window.findChild<QAction *>("actionTheme")->trigger(); dark = false; }
+        }
+        window.newDocument(); window.newDocument();
+        auto *tabs = window.findChild<QTabWidget *>();
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget());
+        editor->setPlainText(QString("short text\n").repeated(200)); editor->document()->setModified(false);
+        const auto editorMatches = [&] {
+            QApplication::processEvents();
+            return matchesWindow(editor->viewport(), QPoint(editor->viewport()->width() - 50, editor->viewport()->height() / 2));
+        };
+        QVERIFY(editorMatches());
+        editor->verticalScrollBar()->setValue(60); QVERIFY(editorMatches());
+        tabs->setCurrentIndex(0); tabs->setCurrentIndex(1); QVERIFY(editorMatches());
+        auto *bar = tabs->tabBar();
+        QVERIFY(matchesWindow(bar, QPoint(bar->tabRect(1).center().x(), 3)));
+        window.openFolder(fixture.path());
+        auto *tree = window.findChild<FileTreeView *>("fileTree");
+        QTRY_VERIFY(tree->model()->rowCount(tree->rootIndex()) > 0);
+        QVERIFY(matchesWindow(tree->viewport(), QPoint(tree->viewport()->width() - 15, tree->viewport()->height() - 15)));
+        // At the beginning of expansion, children must still be visually hidden.
+        // Transparent text snapshots must not leave the final logical rows underneath.
+        auto *files = qobject_cast<QFileSystemModel *>(tree->model());
+        const auto folderIndex = files->index(fixture.filePath("folder"));
+        QVERIFY(folderIndex.isValid());
+        auto animations = AnimationSettings{}; animations.speed = 0.25; tree->setAnimationSettings(animations);
+        const auto treeFrame = [&] {
+            const auto frame = window.grab();
+            return frame.copy(QRect(tree->viewport()->mapTo(&window, QPoint()) * frame.devicePixelRatio(),
+                                    tree->viewport()->size() * frame.devicePixelRatio()));
+        };
+        const auto collapsed = treeFrame();
+        const int belowFolder = tree->visualRect(folderIndex).bottom() + 1;
+        tree->expand(folderIndex); QTRY_COMPARE(files->rowCount(folderIndex), 1); tree->viewport()->grab();
+        auto *animation = tree->findChild<QVariantAnimation *>("treeTransition");
+        QCOMPARE(animation->state(), QAbstractAnimation::Running); animation->setCurrentTime(0);
+        const auto start = treeFrame();
+        const QRect area(0, qCeil(belowFolder * start.devicePixelRatio()), start.width(),
+                         start.height() - qCeil(belowFolder * start.devicePixelRatio()));
+        const auto a = start.toImage(), b = collapsed.toImage();
+        int maxDifference = 0;
+        for (int y = area.top(); y <= area.bottom(); ++y) for (int x = area.left(); x <= area.right(); ++x) {
+            const auto first = a.pixelColor(x, y), second = b.pixelColor(x, y);
+            const int difference = qMax(qAbs(first.red() - second.red()), qMax(qAbs(first.green() - second.green()), qAbs(first.blue() - second.blue())));
+            maxDifference = qMax(maxDifference, difference);
+        }
+        QVERIFY2(maxDifference <= 2, qPrintable(QString::number(maxDifference)));
+        QVERIFY(matchesWindow(tree->viewport(), QPoint(tree->viewport()->width() - 15, tree->viewport()->height() - 15)));
+        animation->setCurrentTime(animation->duration());
+        window.findChild<QAction *>("actionFind")->trigger();
+        auto *search = window.findChild<QFrame *>("searchPanel");
+        QVERIFY(matchesWindow(search, QPoint(search->width() - 5, search->height() / 2)));
+        window.resize(990, 640); QVERIFY(editorMatches());
+        window.findChild<QAction *>("actionSidebar")->trigger(); QVERIFY(editorMatches());
+        window.findChild<QAction *>("actionSidebar")->trigger(); QVERIFY(editorMatches());
+        // Zero opacity and missing files must both restore all original panel surfaces.
+        QVERIFY(background->setSettings({path, 0, 0}));
+        QVERIFY(window.styleSheet().isEmpty());
+        const auto sidebarColor = [&] {
+            const auto image = sidebar->grab().toImage(); return image.pixelColor(image.width() / 2, image.height() - 80);
+        };
+        QCOMPARE(sidebarColor(), QColor("#ffffff"));
+        QVERIFY(background->setSettings({path, 65, 0})); QVERIFY(editorMatches());
+        QVERIFY(QFile::remove(path));
+        QTRY_VERIFY(background->settings().path.isEmpty());
+        QVERIFY(window.styleSheet().isEmpty()); QCOMPARE(sidebarColor(), QColor("#ffffff"));
+        QVERIFY(window.findChild<AppStorage *>()->value("background/path").toString().isEmpty());
+    }
+    void backgroundSettingsApplyCancelAndPersist()
+    {
+        QTemporaryDir fixture;
+        const QString path = fixture.filePath(QStringLiteral("背景 图片.png"));
+        QImage image(80, 60, QImage::Format_RGB32); image.fill(Qt::blue); QVERIFY(image.save(path));
+        {
+            MainWindow window(nullptr, testPaths()); window.newDocument(); window.newDocument();
+            auto *tabs = window.findChild<QTabWidget *>();
+            auto *first = qobject_cast<Editor *>(tabs->widget(0)); first->setPlainText("hello world"); first->document()->setModified(false);
+            auto cursor = first->textCursor(); cursor.setPosition(1); cursor.setPosition(4, QTextCursor::KeepAnchor); first->setTextCursor(cursor);
+            auto *action = window.findChild<QAction *>("actionBackgroundSettings"); QVERIFY(action);
+            bool handled = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = qobject_cast<BackgroundSettingsDialog *>(QApplication::activeModalWidget());
+                if (!dialog) return;
+                dialog->findChild<QLineEdit *>("backgroundPath")->setText(path);
+                dialog->findChild<QSpinBox *>("backgroundOpacity")->setValue(35);
+                dialog->findChild<QSpinBox *>("backgroundBlur")->setValue(12);
+                dialog->accept(); handled = true;
+            });
+            action->trigger(); QVERIFY(handled);
+            for (int i = 0; i < tabs->count(); ++i) {
+                auto *editor = qobject_cast<Editor *>(tabs->widget(i));
+                QVERIFY(editor->background()->isActive()); QCOMPARE(editor->background()->settings().path, path);
+                QCOMPARE(editor->background()->settings().opacity, 35); QCOMPARE(editor->background()->settings().blur, 12);
+                QVERIFY(!editor->dirty());
+            }
+            QCOMPARE(first->textCursor().selectedText(), QString("ell"));
+            window.newDocument(); QVERIFY(qobject_cast<Editor *>(tabs->currentWidget())->background()->isActive());
+            window.findChild<QAction *>("actionClearHistory")->trigger();
+            window.findChild<QAction *>("actionTheme")->trigger();
+            QCOMPARE(first->background()->settings().path, path);
+            handled = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = qobject_cast<BackgroundSettingsDialog *>(QApplication::activeModalWidget());
+                if (!dialog) return;
+                dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Reset)->click();
+                const auto settings = dialog->selectedSettings();
+                handled = settings.path.isEmpty() && settings.opacity == 20 && settings.blur == 0;
+                dialog->reject();
+            });
+            action->trigger(); QVERIFY(handled); QCOMPARE(first->background()->settings().path, path);
+            QCOMPARE(first->background()->settings().opacity, 35); QCOMPARE(first->background()->settings().blur, 12);
+        }
+        {
+            MainWindow reloaded(nullptr, testPaths()); reloaded.newDocument();
+            auto *editor = qobject_cast<Editor *>(reloaded.findChild<QTabWidget *>()->currentWidget());
+            const auto settings = editor->background()->settings();
+            QCOMPARE(settings.path, path); QCOMPARE(settings.opacity, 35); QCOMPARE(settings.blur, 12);
+            // Moving a live background clears both the cached image and its persisted path.
+            QVERIFY(QFile::rename(path, fixture.filePath("moved.png")));
+            QTRY_VERIFY(editor->background()->settings().path.isEmpty()); QVERIFY(!editor->background()->isActive());
+            QVERIFY(reloaded.findChild<AppStorage *>()->value("background/path").toString().isEmpty());
+            QVERIFY(image.save(path)); QTest::qWait(150); QVERIFY(!editor->background()->isActive());
+        }
+        MainWindow cleared(nullptr, testPaths()); cleared.newDocument();
+        QVERIFY(!qobject_cast<Editor *>(cleared.findChild<QTabWidget *>()->currentWidget())->background()->isActive());
+    }
+    void backgroundMissingOrCorruptOnStartupAndInDialog()
+    {
+        QTemporaryDir fixture;
+        const QString path = fixture.filePath("invalid.png");
+        for (bool corrupt : {false, true}) {
+            if (corrupt) { QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("not an image"); }
+            {
+                AppStorage storage(testPaths()); QVERIFY(storage.initialize(false));
+                QVERIFY(storage.setValue("background/path", path)); QVERIFY(storage.setValue("background/opacity", 70));
+            }
+            MainWindow window(nullptr, testPaths()); window.newDocument(); window.newDocument();
+            for (auto *editor : window.findChildren<Editor *>()) {
+                QVERIFY(!editor->background()->isActive()); QVERIFY(editor->background()->settings().path.isEmpty());
+            }
+            QVERIFY(window.findChild<AppStorage *>()->value("background/path").toString().isEmpty());
+            BackgroundSettingsDialog dialog({path, 70, 20}, true);
+            dialog.accept(); QVERIFY(dialog.result() != QDialog::Accepted);
+            QVERIFY(!dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->isEnabled());
+            dialog.findChild<QLineEdit *>("backgroundPath")->clear(); dialog.accept();
+            QCOMPARE(dialog.result(), int(QDialog::Accepted));
+        }
+    }
+    void backgroundReplacementAndDirectoryLoss()
+    {
+        QTemporaryDir fixture;
+        const QString folder = fixture.filePath("images"); QVERIFY(QDir().mkpath(folder));
+        const QString path = folder + "/background.png";
+        QImage image(32, 32, QImage::Format_RGB32); image.fill(Qt::red); QVERIFY(image.save(path));
+        EditorBackground background; QVERIFY(background.setSettings({path, 100, 0}));
+        QSignalSpy changes(&background, &EditorBackground::changed);
+        QTest::qWait(30);
+        image.fill(Qt::blue); QVERIFY(image.save(path));
+        QTRY_VERIFY(changes.count() > 0);
+        QImage rendered(32, 32, QImage::Format_RGB32); rendered.fill(Qt::black);
+        { QPainter painter(&rendered); background.paint(painter, rendered.rect()); }
+        QCOMPARE(rendered.pixelColor(16, 16), QColor(Qt::blue));
+        QVERIFY(QDir().rename(folder, fixture.filePath("renamed")));
+        QTRY_VERIFY(background.settings().path.isEmpty()); QVERIFY(!background.isActive());
+        QVERIFY(QDir().rename(fixture.filePath("renamed"), folder));
+        QVERIFY(background.setSettings({path, 100, 0}));
+        { QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write("broken image"); }
+        QTRY_VERIFY(background.settings().path.isEmpty()); QVERIFY(!background.isActive());
+    }
     void treeSitterIndicatorFollowsCurrentDocumentAndStaysVisible()
     {
         QString executable = QCoreApplication::applicationDirPath() + "/nya_tree_sitter_tests";

@@ -5,6 +5,7 @@
 #include "FileTreeView.h"
 #include "FontSettingsDialog.h"
 #include "AnimationSettingsDialog.h"
+#include "BackgroundSettingsDialog.h"
 #include "LanguageSettingsDialog.h"
 #include "Theme.h"
 #include "WelcomePage.h"
@@ -32,6 +33,8 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPointer>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QProcess>
 #include <QScrollBar>
 #include <QShortcut>
@@ -87,10 +90,18 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     m_animations.selectionEnabled = m_storage->value("animation/selection", true).toBool();
     const double speed = m_storage->value("animation/speed", 1.0).toDouble();
     m_animations.speed = std::isfinite(speed) && speed > 0 ? qBound(0.25, speed, 3.0) : 1.0;
+    m_background = new EditorBackground(this);
     Theme::apply(*qApp, m_dark);
     m_searchTimer = new QTimer(this); m_searchTimer->setSingleShot(true); m_searchTimer->setInterval(180);
     connect(m_searchTimer, &QTimer::timeout, this, &MainWindow::refreshSearch);
     setupWorkspace(); setupMenus(); setupToolbar(); setupStatus();
+    connect(m_background, &EditorBackground::changed, this, &MainWindow::updateBackgroundSurface);
+    connect(m_background, &EditorBackground::fileUnavailable, this, [this] {
+        m_storage->setValue("background/path", QString());
+        statusBar()->showMessage(QStringLiteral("背景图片已丢失或无法读取，已自动取消背景。"), 8000);
+    });
+    m_background->setSettings({m_storage->value("background/path").toString(),
+        m_storage->value("background/opacity", 20).toInt(), m_storage->value("background/blur", 0).toInt()});
     applyAnimationSettings();
     restoreGeometry(m_storage->value("window/geometry").toByteArray());
     const auto splitter = m_storage->value("window/splitter").toByteArray();
@@ -120,12 +131,42 @@ MainWindow::~MainWindow()
     if (m_fileSearchCancel) m_fileSearchCancel->store(true, std::memory_order_relaxed);
 }
 
+void MainWindow::paintEvent(QPaintEvent *event)
+{
+    QMainWindow::paintEvent(event);
+    QPainter painter(this); painter.setClipRegion(event->region());
+    painter.fillRect(event->rect(), QColor(m_dark ? "#141820" : "#f5f7fa"));
+    m_background->paint(painter, rect());
+}
+
+void MainWindow::updateBackgroundSurface()
+{
+    const bool active = m_background->isActive();
+    if (active != m_backgroundVisible) {
+        m_backgroundVisible = active;
+        // Only the main window's surfaces become transparent. Popup menus and dialogs
+        // retain their themed surfaces, selection colors and readable controls.
+        setStyleSheet(active ? QStringLiteral(R"(
+            QMenuBar, QMenuBar::item, QToolBar, QStatusBar,
+            QTabWidget, QTabBar, QTabBar::tab, QTabBar::tab:selected,
+            QStackedWidget, QWidget#welcomePage, QFrame#sidebar, QFrame#searchPanel,
+            QListWidget, QTreeView,
+            QLineEdit#fileSearchInput, QLineEdit#findInput, QLineEdit#replaceInput {
+                background: transparent;
+            }
+        )") : QString());
+        // Applying a stylesheet can restore Qt's cached inherited font.
+        for (int i = 0; i < m_tabs->count(); ++i) qobject_cast<Editor *>(m_tabs->widget(i))->setDark(m_dark);
+    }
+    update();
+}
+
 void MainWindow::setupWorkspace()
 {
     m_splitter = new QSplitter(this);
     m_splitter->setChildrenCollapsible(false);
     m_sidebar = new QFrame(m_splitter); m_sidebar->setObjectName("sidebar"); m_sidebar->setMinimumWidth(170);
-    auto *side = new QVBoxLayout(m_sidebar); side->setContentsMargins(0, 0, 0, 12); side->setSpacing(0);
+    auto *side = new QVBoxLayout(m_sidebar); side->setContentsMargins(0, 0, 1, 12); side->setSpacing(0);
     auto *heading = new QLabel(QStringLiteral("已打开的文档")); heading->setObjectName("sectionLabel"); side->addWidget(heading);
     m_documents = new QListWidget; m_documents->setObjectName("openDocuments");
     m_documents->setMaximumHeight(220); m_documents->setMinimumHeight(100);
@@ -209,6 +250,7 @@ void MainWindow::setupWorkspace()
     m_files = new QFileSystemModel(this);
     m_files->setReadOnly(true); m_files->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
     m_tree = new FileTreeView; m_tree->setObjectName("fileTree"); m_tree->setModel(m_files); m_tree->setHeaderHidden(true); m_tree->setIndentation(14);
+    m_tree->setBackground(m_background, this);
     m_tree->setUniformRowHeights(true); m_tree->hide();
     for (int i = 1; i < m_files->columnCount(); ++i) m_tree->hideColumn(i);
     side->addWidget(m_tree, 1);
@@ -344,6 +386,8 @@ void MainWindow::setupMenus()
     auto *settings = menuBar()->addMenu(QStringLiteral("设置(&T)"));
     auto *fontSettings = settings->addAction(QStringLiteral("字体与字号…"), this, &MainWindow::chooseEditorFont);
     fontSettings->setObjectName("actionFontSettings");
+    auto *backgroundSettings = settings->addAction(QStringLiteral("全局背景…"), this, &MainWindow::chooseBackgroundSettings);
+    backgroundSettings->setObjectName("actionBackgroundSettings");
     auto *animationSettings = settings->addAction(QStringLiteral("动画设置…"), this, &MainWindow::chooseAnimationSettings);
     animationSettings->setObjectName("actionAnimationSettings");
     auto *languageSettings = settings->addAction(QStringLiteral("语言支持…"), this, &MainWindow::chooseLanguageSettings);
@@ -466,6 +510,7 @@ Editor *MainWindow::addEditor(const QString &name)
 {
     auto *editor = new Editor;
     editor->displayName = name; editor->setDark(m_dark);
+    editor->setBackground(m_background, this);
     editor->setLanguageSettings(m_languages);
     connect(editor, &Editor::languageStatusChanged, this, [this, editor](const QString &) {
         if (editor == current()) updateTreeSitterStatus();
@@ -954,6 +999,17 @@ void MainWindow::chooseLanguageSettings()
     for (int i = 0; i < m_tabs->count(); ++i)
         qobject_cast<Editor *>(m_tabs->widget(i))->setLanguageSettings(m_languages);
     updateTreeSitterStatus();
+}
+
+void MainWindow::chooseBackgroundSettings()
+{
+    BackgroundSettingsDialog dialog(m_background->settings(), m_dark, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    m_background->setSettings(dialog.selectedSettings());
+    const auto settings = m_background->settings();
+    m_storage->setValue("background/path", settings.path);
+    m_storage->setValue("background/opacity", settings.opacity);
+    m_storage->setValue("background/blur", settings.blur);
 }
 
 void MainWindow::chooseAnimationSettings()

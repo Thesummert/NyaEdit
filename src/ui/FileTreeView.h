@@ -2,14 +2,17 @@
 #include "Animation.h"
 #include <QPersistentModelIndex>
 #include <QPixmap>
+#include <QPointer>
 #include <QTreeView>
 
 namespace nya {
+class EditorBackground;
 class FileTreeView : public QTreeView {
     Q_OBJECT
 public:
     explicit FileTreeView(QWidget *parent = nullptr);
     void setAnimationSettings(const AnimationSettings &settings);
+    void setBackground(EditorBackground *background, QWidget *surface);
     void setModel(QAbstractItemModel *model) override;
     void setRootIndex(const QModelIndex &index) override;
 protected:
@@ -27,6 +30,8 @@ private:
     int descendantHeight(const QModelIndex &index, bool cached) const;
     int cachedRowBottom(const QModelIndex &index) const;
     QVariantAnimation m_transition;
+    QPointer<EditorBackground> m_background;
+    QPointer<QWidget> m_backgroundSurface;
     QPixmap m_logicalFrame;
     QPixmap m_expandedFrame;
     QPixmap m_collapsedFrame;

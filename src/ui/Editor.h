@@ -4,10 +4,12 @@
 #include "Animation.h"
 #include "TreeSitter.h"
 #include <QPlainTextEdit>
+#include <QPointer>
 
 namespace nya {
 class Highlighter;
 class Gutter;
+class EditorBackground;
 class Editor : public QPlainTextEdit {
     Q_OBJECT
 public:
@@ -29,6 +31,8 @@ public:
     LanguageSettings languageSettings() const;
     TreeSitterStatus treeSitterStatus() const;
     void setDark(bool dark);
+    void setBackground(EditorBackground *background, QWidget *surface = nullptr);
+    EditorBackground *background() const;
     void setSearchMatches(const QVector<SearchMatch> &matches);
     void clearSearchMatches();
     int gutterWidth() const;
@@ -60,12 +64,15 @@ private:
     void restartCursorBlink();
     void animateSelection();
     void updateSelectionPalette(qreal strength = 1.0);
+    void paintBackground(QPainter &painter, QWidget *target, const QRect &dirtyRect);
     QRectF caretRect() const;
     void updateGutterWidth();
     void updateHighlights();
     void indentSelection(bool outdent);
     Gutter *m_gutter;
     Highlighter *m_highlighter;
+    QPointer<EditorBackground> m_background;
+    QPointer<QWidget> m_backgroundSurface;
     QVector<SearchMatch> m_matches;
     QFont m_editorFont;
     bool m_dark = true;

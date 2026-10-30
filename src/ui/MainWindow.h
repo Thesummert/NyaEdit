@@ -26,6 +26,7 @@ class QTreeView;
 
 namespace nya {
 class Editor;
+class EditorBackground;
 class FileTreeView;
 class WelcomePage;
 class MainWindow : public QMainWindow {
@@ -37,6 +38,7 @@ public:
     void openFolder(const QString &path = {});
     void newDocument();
 protected:
+    void paintEvent(QPaintEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -66,6 +68,8 @@ private:
     void updateWorkspacePage();
     void setDark(bool dark);
     void chooseEditorFont();
+    void chooseBackgroundSettings();
+    void updateBackgroundSurface();
     void chooseAnimationSettings();
     void chooseLanguageSettings();
     void applyAnimationSettings();
@@ -95,6 +99,7 @@ private:
     QStackedWidget *m_pages = nullptr;
     WelcomePage *m_welcome = nullptr;
     AppStorage *m_storage = nullptr;
+    EditorBackground *m_background = nullptr;
     quint64 m_historyEpoch = 0;
     QSplitter *m_splitter = nullptr;
     QFrame *m_sidebar = nullptr;
@@ -142,6 +147,7 @@ private:
     int m_matchIndex = -1;
     int m_untitled = 0;
     bool m_dark = true;
+    bool m_backgroundVisible = false;
     bool m_checkingExternal = false;
     bool m_wrap = false;
 };

@@ -1,4 +1,5 @@
 #include "FileTreeView.h"
+#include "EditorBackground.h"
 #include <QEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -20,6 +21,14 @@ FileTreeView::FileTreeView(QWidget *parent) : QTreeView(parent)
 void FileTreeView::setAnimationSettings(const AnimationSettings &settings)
 {
     finishTransition(); m_animationsEnabled = settings.interfaceEnabled; m_duration = settings.duration(180);
+}
+
+void FileTreeView::setBackground(EditorBackground *background, QWidget *surface)
+{
+    if (m_background) disconnect(m_background, nullptr, this, nullptr);
+    m_background = background; m_backgroundSurface = surface;
+    if (background) connect(background, &EditorBackground::changed, this, &FileTreeView::invalidateFrame);
+    invalidateFrame();
 }
 
 void FileTreeView::setModel(QAbstractItemModel *model)
@@ -94,7 +103,13 @@ void FileTreeView::paintTransition(QPainter &painter)
     const int revealed = qRound(m_childrenHeight * m_transition.currentValue().toReal());
     const QRect region(0, m_transitionTop, viewport()->width(), qMax(0, viewport()->height() - m_transitionTop));
     painter.save();
-    painter.setClipRect(region, Qt::IntersectClip); painter.fillRect(region, viewport()->palette().brush(QPalette::Base));
+    painter.setClipRect(region, Qt::IntersectClip);
+    if (m_background && m_background->isActive() && m_backgroundSurface) {
+        // Erase the logical rows with the stationary backdrop before drawing the
+        // moving text snapshots. A transparent fill would leave duplicate rows.
+        painter.fillRect(region, m_backgroundSurface->palette().brush(QPalette::Window));
+        m_background->paint(painter, m_backgroundSurface->rect().translated(-viewport()->mapTo(m_backgroundSurface, QPoint())));
+    } else painter.fillRect(region, viewport()->palette().brush(QPalette::Base));
     painter.save();
     painter.setClipRect(QRect(0, m_transitionTop, viewport()->width(), revealed), Qt::IntersectClip);
     painter.drawPixmap(0, m_transitionTop - m_expandedTop + revealed - m_childrenHeight, m_expandedFrame); painter.restore();
@@ -139,7 +154,7 @@ void FileTreeView::paintEvent(QPaintEvent *event)
     // Cache only the visible rows. Render directly through QTreeView instead of
     // grabbing the viewport during a paint event, which would cause recursive paints.
     QPixmap frame(viewport()->size() * devicePixelRatioF()); frame.setDevicePixelRatio(devicePixelRatioF());
-    frame.fill(viewport()->palette().color(QPalette::Base));
+    frame.fill(m_background && m_background->isActive() ? QColor(Qt::transparent) : viewport()->palette().color(QPalette::Base));
     {
         QPainter painter(&frame); drawTree(&painter, viewport()->rect());
     }

@@ -20,6 +20,8 @@ add_library(nya_widgets STATIC
     assets/icons.qrc
     src/ui/Animation.cpp src/ui/Animation.h
     src/ui/AnimationSettingsDialog.cpp src/ui/AnimationSettingsDialog.h
+    src/ui/BackgroundSettingsDialog.cpp src/ui/BackgroundSettingsDialog.h
+    src/ui/EditorBackground.cpp src/ui/EditorBackground.h
     src/ui/Editor.cpp src/ui/Editor.h
     src/ui/FileTreeView.cpp src/ui/FileTreeView.h
     src/ui/FontSettingsDialog.cpp src/ui/FontSettingsDialog.h

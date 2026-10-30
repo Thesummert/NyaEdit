@@ -4,7 +4,7 @@
 
 | 文件 | 内容 | 位置接口 |
 | --- | --- | --- |
-| `editor.ini` | 主题、侧栏、字体及字号、动画、语言支持、自动换行、文件搜索模式、窗口位置及分栏尺寸 | `QStandardPaths::AppConfigLocation` |
+| `editor.ini` | 主题、背景、侧栏、字体及字号、动画、语言支持、自动换行、文件搜索模式、窗口位置及分栏尺寸 | `QStandardPaths::AppConfigLocation` |
 | `system.ini` | 预留应用系统选项，目前只有格式版本 | `QStandardPaths::AppConfigLocation` |
 | `history.json` | 最近文件与文件夹、打开时间、文件选择器上次目录 | `QStandardPaths::AppLocalDataLocation` |
 
@@ -57,6 +57,19 @@ treeSitterConfigPath=
 `editor/fontFamily` 保存编辑区字体名称，初始为空时使用平台默认等宽字体（macOS 为 Menlo，Windows 为 Consolas，其他平台使用 Qt 系统等宽字体）。`editor/fontSize` 使用 pt，默认 13，支持 6–96。在“设置 → 字体与字号…”中确认后同时更新所有文档并持久化；取消只丢弃对话框中的选择。已有配置缺少字体名称时仍保留原字号。界面控件字体不受编辑器字体设置影响。
 
 `search/fuzzy` 控制文件夹搜索：默认 `true`，字符按顺序非连续匹配；关闭后使用连续片段匹配。在搜索框右键菜单中切换后立即保存并重新搜索，清除历史不会重置此设置。
+
+背景设置在首次通过“设置 → 全局背景…”确认时写入以下键；缺少键时使用默认值，无需修改旧配置：
+
+```ini
+[background]
+path=
+opacity=20
+blur=0
+```
+
+`background/path` 为原背景图片的绝对路径，空值表示使用主题底色，不复制原文件。`background/opacity` 是图片不透明度（0–100%，默认 20%）；`background/blur` 是高斯模糊强度（0–40，默认 0），相对于图片尺寸计算，数值越大越模糊。背景以整个主窗口为统一坐标系，覆盖欢迎页、侧栏、菜单栏、工具栏、标签栏、编辑区与状态栏；各区域连续显示同一张图片，窗口缩放时统一调整，滚动和切换文档不会重新定位图片。确认后立即应用并保存，取消只丢弃预览；清空路径或恢复默认后确认可取消背景。清除历史不会重置背景设置。
+
+运行时监测原图片，并定期和在应用恢复激活时检查文件；原图片被移动、删除、损坏或无法读取时取消背景、释放图片缓存、恢复所有窗口区域的主题底色，并清空持久化的 `background/path`。启动时也执行校验，因此丢失的背景不会在重启后残留；保留不透明度和模糊偏好以便下次选图。图片重新出现后需要主动选择，不会自行恢复。图片解码与模糊结果在窗口内共享，输入与滚动时只绘制缓存。
 
 `language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。`language/treeSitterConfigPath` 可指定 Tree-sitter 的 `config.json`，留空使用 CLI 默认配置；建议填写绝对路径。在“设置 → 语言支持…”中确认后应用到所有已打开文档，并供新文档和重启后使用；取消不会修改设置，清除历史不会重置语言支持。语言解析器及其高亮规则由用户现有的 Tree-sitter 配置提供，NyaEdit 不自动安装。此设置提供语法着色，不包含 LSP 补全、诊断或定义跳转。
 

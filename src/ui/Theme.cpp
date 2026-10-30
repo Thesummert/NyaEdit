@@ -157,6 +157,7 @@ void Theme::apply(QApplication &app, bool dark)
         QTabBar::tab:selected { background: %1; color: %5; border-bottom: 2px solid %7; }
         QTabBar::tab:hover { color: %5; }
         QPlainTextEdit { background: %1; border: none; padding: 8px 0; }
+        QPlainTextEdit#editor { background: transparent; }
         QPlainTextEdit#fontPreview { border: 1px solid %4; border-radius: 6px; padding: 10px; }
         QFrame#sidebar { background: %2; border-right: 1px solid %4; }
         QLabel#sectionLabel { color: %6; font-size: 11px; font-weight: 600; padding: 14px 14px 6px; }

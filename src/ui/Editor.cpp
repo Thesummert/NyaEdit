@@ -1,4 +1,5 @@
 #include "Editor.h"
+#include "EditorBackground.h"
 #include "Highlighter.h"
 #include <QFontDatabase>
 #include <QApplication>
@@ -35,6 +36,8 @@ QFont Editor::defaultEditorFont()
 Editor::Editor(QWidget *parent) : QPlainTextEdit(parent), m_gutter(new Gutter(this)),
     m_highlighter(new Highlighter(document()))
 {
+    setObjectName("editor");
+    viewport()->setAutoFillBackground(false);
     m_editorFont = defaultEditorFont();
     connect(m_highlighter, &Highlighter::languageStatusChanged, this, &Editor::languageStatusChanged);
     setFont(m_editorFont);
@@ -61,7 +64,10 @@ Editor::Editor(QWidget *parent) : QPlainTextEdit(parent), m_gutter(new Gutter(th
     connect(&m_selectionFade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) { updateSelectionPalette(value.toReal()); });
     connect(this, &QPlainTextEdit::blockCountChanged, this, [this] { updateGutterWidth(); });
     connect(this, &QPlainTextEdit::updateRequest, this, [this](const QRect &rect, int dy) {
-        if (dy) m_gutter->scroll(0, dy);
+        if (dy && m_background && m_background->isActive()) {
+            // Text scrolling must not shift the fixed background picture.
+            viewport()->update(); m_gutter->update();
+        } else if (dy) m_gutter->scroll(0, dy);
         else m_gutter->update(0, rect.y(), m_gutter->width(), rect.height());
         if (rect.contains(viewport()->rect())) updateGutterWidth();
         if (dy) updateAnimatedCursor(false);
@@ -100,6 +106,16 @@ void Editor::setDark(bool dark)
     m_selectionFade.stop(); updateSelectionPalette(); updateAnimatedCursor(false);
 }
 void Editor::setSearchMatches(const QVector<SearchMatch> &matches) { m_matches = matches; updateHighlights(); }
+EditorBackground *Editor::background() const { return m_background.data(); }
+void Editor::setBackground(EditorBackground *background, QWidget *surface)
+{
+    if (m_background) disconnect(m_background, nullptr, this, nullptr);
+    m_background = background;
+    m_backgroundSurface = surface;
+    const auto refresh = [this] { updateHighlights(); viewport()->update(); m_gutter->update(); };
+    if (background) connect(background, &EditorBackground::changed, this, refresh);
+    refresh();
+}
 void Editor::clearSearchMatches() { m_matches.clear(); updateHighlights(); }
 int Editor::fontSize() const { return m_editorFont.pointSize(); }
 void Editor::setFontSize(int size)
@@ -175,6 +191,7 @@ void Editor::updateSelectionPalette(qreal strength)
     const QColor color(mix(background.red(), highlight.red()), mix(background.green(), highlight.green()), mix(background.blue(), highlight.blue()));
     auto colors = palette();
     for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+        colors.setColor(group, QPalette::Base, Qt::transparent);
         colors.setColor(group, QPalette::Highlight, color); colors.setColor(group, QPalette::HighlightedText, Qt::white);
     }
     setPalette(colors); viewport()->update();
@@ -191,12 +208,27 @@ void Editor::animateSelection()
 
 void Editor::paintEvent(QPaintEvent *event)
 {
+    {
+        QPainter painter(viewport());
+        paintBackground(painter, viewport(), event->rect());
+    }
     QPlainTextEdit::paintEvent(event);
     if (!m_animationSettings.cursorEnabled || !hasFocus() || isReadOnly() || textCursor().hasSelection()) return;
     if (m_targetCursor != caretRect()) updateAnimatedCursor(false);
     QPainter painter(viewport());
     QColor color(m_dark ? "#8df5d6" : "#087b65"); color.setAlphaF(m_cursorOpacity);
     painter.fillRect(m_paintedCursor, color);
+}
+
+void Editor::paintBackground(QPainter &painter, QWidget *target, const QRect &dirtyRect)
+{
+    painter.fillRect(dirtyRect, QColor(m_dark ? "#141820" : "#f5f7fa"));
+    if (!m_background) return;
+    // Every part of the window uses the same image coordinates, including the gutter.
+    QWidget *surface = m_backgroundSurface ? m_backgroundSurface.data() : this;
+    const QRect rect = (m_backgroundSurface ? surface->rect() : contentsRect())
+        .translated(-target->mapTo(surface, QPoint()));
+    m_background->paint(painter, rect);
 }
 
 void Editor::focusInEvent(QFocusEvent *event)
@@ -226,7 +258,7 @@ void Editor::resizeEvent(QResizeEvent *event)
 void Editor::paintGutter(QPaintEvent *event)
 {
     QPainter p(m_gutter);
-    p.fillRect(event->rect(), QColor(m_dark ? "#141820" : "#f5f7fa"));
+    paintBackground(p, m_gutter, event->rect());
     p.setFont(font());
     QTextBlock block = firstVisibleBlock();
     int number = block.blockNumber();
@@ -245,7 +277,9 @@ void Editor::updateHighlights()
 {
     QList<QTextEdit::ExtraSelection> selections;
     QTextEdit::ExtraSelection line;
-    line.format.setBackground(QColor(m_dark ? "#1b212c" : "#edf2f7"));
+    QColor lineColor(m_dark ? "#1b212c" : "#edf2f7");
+    if (m_background && m_background->isActive()) lineColor.setAlpha(160);
+    line.format.setBackground(lineColor);
     line.format.setProperty(QTextFormat::FullWidthSelection, true);
     line.cursor = textCursor(); line.cursor.clearSelection();
     selections.append(line);

@@ -5,17 +5,18 @@ NyaEdit 采用进程内的原生分层架构。前端为 Qt Widgets，后端为�
 ```mermaid
 flowchart LR
     User[用户输入] --> UI[MainWindow / Editor]
-    UI --> Search[core: Search]
+    UI --> Adapter[qt: 类型适配]
+    Adapter --> Search[core: Search]
     UI --> Pool[QtConcurrent 线程池]
     Pool --> Load[core: loadFile]
     Load --> Codec[core: EncodingService / ICU]
     Load --> Disk[(文件系统)]
     Pool --> Watcher[QFutureWatcher]
     Watcher --> UI
-    UI --> Save[core: saveFile / QSaveFile]
+    UI --> Save[core: saveFile / 原子替换]
     Save --> Codec
     Save --> Disk
-    UI --> Storage[core: AppStorage]
+    UI --> Storage[qt: AppStorage]
     Storage --> Preferences[(editor.ini / system.ini)]
     Storage --> History[(history.json)]
 ```
@@ -24,16 +25,23 @@ flowchart LR
 
 - `EncodingService`：BOM 确定编码、UTF-8 严格验证、ICU 统计检测、严格编码与解码。每次调用创建自己的转换器，不跨线程共享 ICU 状态。自动检测采样前 256 KiB，再针对候选编码严格解码整个文件。
 - `loadFile`：以二进制模式读取，返回 `LoadedFile`；其中包含文本、编码、BOM、换行方式、磁盘时间和错误信息。内部统一为 LF，保存时再恢复目标换行。无效字节不会静默替换为问号。
-- `saveFile`：先完成严格编码，再通过 `QSaveFile` 写临时文件并提交；不启用直接覆盖回退。编码失败不会触碰目标文件。
-- `Search`：使用 Unicode 正则引擎，同时支持字面量模式；返回 UTF-16 位置，与 Qt 文本光标一致。零宽匹配由全局匹配迭代器推进；全部替换在原始快照上构建结果，避免替换内容再次参与匹配。
+- `saveFile`：先完成严格编码，再写同目录临时文件并原子替换目标；不启用直接覆盖回退。编码失败不会触碰目标文件。
+- `Search`：使用 ICU Unicode 正则引擎，同时支持字面量模式；返回 UTF-16 位置，与 Qt 文本光标一致。零宽匹配由全局匹配迭代器推进；全部替换在原始快照上构建结果，避免替换内容再次参与匹配。
 - `FileSearch`：递归查找文件名与相对路径，默认按 Unicode 码点进行不区分大小写的有序非连续模糊匹配，也可通过 `FileSearchMode::Substring` 指定连续片段匹配。包含隐藏文件，跳过版本控制元数据目录和目录符号链接。使用共享原子标志取消任务，结果最多保留 1000 条并按相对路径排序；不访问 QWidget 或文件正文。
+核心接口使用标准 C++ 值类型与普通函数，命名空间为 `nya::core`，公开头文件通过 `<nya/core/...>` 引入。文本为 `std::u16string`，路径为 `std::filesystem::path`，不使用 Qt 类型、QObject 信号或事件循环。核心仅依赖 C++17 和 ICU。
+
+核心由独立仓库 `NyaEditCore` 维护，以 Git 子模块放在 `src/core`。其 CMake 配置构建 `nya_core` 与无需 Qt 的 `nya_backend_tests`，支持独立构建。
+
+## Qt 应用服务 `nya_qt`
+
+父仓库 `src/qt` 提供 Qt 类型与后端值类型之间的转换，保留应用现有的 QString 接口。编码、文件读写、文本搜索和路径搜索委托给 core。针对 QTextDocument 的 U+2028/U+2029 限制在适配层执行，后端保留这些字符。
+
 - `AppStorage`：以 `QStandardPaths` 选择用户配置与数据目录，以 `QSettings` 保存编辑器偏好和预留系统配置，以 `QSaveFile` 原子保存文件 / 文件夹历史。支持注入路径供测试和其他前端使用，通过信号报告变更与错误；当前由 GUI 线程调用。详见 [存储接口](configuration.md)。
 - `TreeSitter`：通过异步 `QProcess` 调用系统 CLI 的 `highlight --html --css-classes`，读取用户配置中的语言解析器和查询。以 UTF-8 临时快照处理未保存内容，按后缀选择语言；HTML 捕获转换为 UTF-16 区间，验证解码后的文本与快照一致后再交给 UI。请求版本号防止旧结果覆盖新内容；取消及销毁时终止进程。运行限时 5 秒，输入上限 2 MiB，输出上限 32 MiB，不依赖 Tree-sitter 开发库。
-- `LspClient`：通过异步 `QProcess` 的 stdio 与独立语言服务器通信，处理 Content-Length 分包 / 连包、初始化与关闭、请求 ID、超时及取消。按静态同步能力发送文档通知，提供补全 / 悬停 / 定义请求和诊断信号，位置统一为 UTF-16；结果为原始 JSON，由调用方解释。仅依赖 Qt Core。用法见 [核心库接口](../src/core/README.md#简单-lsp-接口)。
 
-核心接口使用值类型、普通函数及 QObject 信号，不产生界面副作用。核心依赖 Qt Core 与 ICU，能够供 CLI、测试或其他原生前端复用。
+- `LspClient`：通过异步 `QProcess` 的 stdio 与语言服务器通信，处理 JSON-RPC 分包、初始化与关闭、文档同步、超时及取消。保持上游 LSP 接口，属于 Qt 应用服务，不引入 core 的构建依赖。
 
-核心由独立仓库 `NyaEditCore` 维护，以 Git 子模块放在 `src/core`。其 CMake 配置负责构建 `nya_core` 和四组核心测试，既支持单独构建，也支持由父项目通过 `add_subdirectory(src/core)` 集成。父仓库维护界面、任务运行及其测试；完整构建时仍会运行核心测试。
+配置、LSP 协议与 Tree-sitter 调度测试位于父仓库 `tests/`，与 Qt 类型适配测试一起链接 `nya_qt` 和 Qt Test。核心的独立测试不需要 Qt。
 
 ## 界面库 `nya_widgets`
 
@@ -58,7 +66,7 @@ Unix 上 `TaskRunner` 在规划命令前异步读取用户登录交互 shell 导
 
 文件成功加载后才写入历史，打开文件夹成功后记录其类型与路径。清空历史会增加窗口的历史版本号，已在读取中的旧任务完成时不再回填记录。普通保存不重新登记已有文件，重新打开或另存为新路径会记录新的打开行为。
 
-`MainWindow` 根据本次打开时的文件夹路径过滤文件历史：根目录及子目录内的文件不单独记录，文件夹外的文件正常记录。文件加载任务捕获该路径，避免用户在加载期间切换文件夹改变记录规则；核心 `AppStorage` 仍提供通用的历史存储接口。
+`MainWindow` 根据本次打开时的文件夹路径过滤文件历史：根目录及子目录内的文件不单独记录，文件夹外的文件正常记录。文件加载任务捕获该路径，避免用户在加载期间切换文件夹改变记录规则；应用层 `AppStorage` 仍提供通用的历史存储接口。
 
 ## 数据保护
 

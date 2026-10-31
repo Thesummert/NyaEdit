@@ -1399,11 +1399,9 @@ void MainWindow::replaceCurrent()
     if (cursor.selectionStart() != found.start || cursor.selectionEnd() != found.start + found.length) { findNext(); return; }
     QString replacement = m_replace->text();
     if (m_regex->isChecked()) {
-        auto it = Search::expression(searchOptions()).globalMatch(m_searchSnapshot);
-        // Use the same global iterator as search, including its handling of zero-length matches.
-        for (int i = 0; i <= m_matchIndex && it.hasNext(); ++i) {
-            const auto match = it.next(); if (i == m_matchIndex) replacement = Search::expand(replacement, match);
-        }
+        QString error;
+        replacement = Search::replacementForMatch(m_searchSnapshot, searchOptions(), replacement, m_matchIndex, &error);
+        if (!error.isEmpty()) { statusBar()->showMessage(error, 5000); return; }
     }
     cursor.beginEditBlock(); cursor.insertText(replacement); cursor.endEditBlock(); current()->setTextCursor(cursor);
     const int resume = cursor.position() + (found.length == 0 ? 1 : 0);

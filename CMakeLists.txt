@@ -16,6 +16,21 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/core/CMakeLists.txt")
 endif()
 add_subdirectory(src/core)
 
+# Qt application services and conversions are outside the portable backend.
+add_library(nya_qt STATIC
+    src/qt/AppStorage.cpp src/qt/AppStorage.h
+    src/qt/TreeSitter.cpp src/qt/TreeSitter.h
+    src/qt/LspClient.cpp src/qt/LspClient.h
+    src/qt/Encoding.cpp src/qt/Encoding.h
+    src/qt/FileIO.cpp src/qt/FileIO.h
+    src/qt/FileSearch.cpp src/qt/FileSearch.h
+    src/qt/Search.cpp src/qt/Search.h src/qt/CoreConversion.h)
+target_include_directories(nya_qt PUBLIC src/qt)
+target_link_libraries(nya_qt PUBLIC nya_core Qt${QT_VERSION_MAJOR}::Core)
+if(MSVC)
+    target_compile_options(nya_qt PRIVATE /W4 /utf-8)
+endif()
+
 # Project task orchestration belongs to the application, independently of the core submodule.
 add_library(nya_tasks STATIC
     src/tasks/TaskConfiguration.cpp src/tasks/TaskConfiguration.h
@@ -46,7 +61,7 @@ add_library(nya_widgets STATIC
     src/ui/WelcomePage.cpp src/ui/WelcomePage.h
     src/ui/Theme.cpp src/ui/Theme.h)
 target_include_directories(nya_widgets PUBLIC src/ui)
-target_link_libraries(nya_widgets PUBLIC nya_core nya_tasks Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg)
+target_link_libraries(nya_widgets PUBLIC nya_qt nya_tasks Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg)
 
 add_executable(NyaEdit MACOSX_BUNDLE WIN32 src/main.cpp)
 target_link_libraries(NyaEdit PRIVATE nya_widgets)
@@ -74,13 +89,28 @@ endif()
 
 if(BUILD_TESTING)
     find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
+    foreach(pair IN ITEMS "nya_tests|CoreTests" "nya_storage_tests|StorageTests" "nya_tree_sitter_tests|TreeSitterTests" "nya_lsp_tests|LspTests")
+        string(REPLACE "|" ";" parts "${pair}")
+        list(GET parts 0 target)
+        list(GET parts 1 source)
+        add_executable(${target} tests/${source}.cpp)
+        target_link_libraries(${target} PRIVATE nya_qt Qt${QT_VERSION_MAJOR}::Test)
+        if(MSVC)
+            target_compile_options(${target} PRIVATE /utf-8)
+        endif()
+        add_test(NAME ${target} COMMAND ${target})
+        set_tests_properties(${target} PROPERTIES TIMEOUT 90)
+    endforeach()
     add_executable(nya_task_tests tests/TaskTests.cpp)
     target_link_libraries(nya_task_tests PRIVATE nya_tasks Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME nya_task_tests COMMAND nya_task_tests)
     set_tests_properties(nya_task_tests PROPERTIES TIMEOUT 60)
     add_executable(nya_ui_tests tests/WidgetTests.cpp)
     target_link_libraries(nya_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
-    add_dependencies(nya_ui_tests nya_tree_sitter_tests nya_lsp_tests nya_task_tests)
+    add_dependencies(nya_ui_tests nya_tree_sitter_tests nya_task_tests)
+    if(TARGET nya_lsp_tests)
+        add_dependencies(nya_ui_tests nya_lsp_tests)
+    endif()
     if(MSVC)
         target_compile_options(nya_ui_tests PRIVATE /utf-8)
         target_compile_options(nya_task_tests PRIVATE /utf-8)
@@ -89,7 +119,9 @@ if(BUILD_TESTING)
     set_tests_properties(nya_ui_tests PROPERTIES TIMEOUT 90)
     add_executable(nya_lsp_ui_tests tests/LspWidgetTests.cpp)
     target_link_libraries(nya_lsp_ui_tests PRIVATE nya_widgets Qt${QT_VERSION_MAJOR}::Test)
-    add_dependencies(nya_lsp_ui_tests nya_lsp_tests)
+    if(TARGET nya_lsp_tests)
+        add_dependencies(nya_lsp_ui_tests nya_lsp_tests)
+    endif()
     if(MSVC)
         target_compile_options(nya_lsp_ui_tests PRIVATE /utf-8)
     endif()

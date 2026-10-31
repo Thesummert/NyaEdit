@@ -33,14 +33,16 @@
 
 ```text
 src/
-├── core/                 # NyaEditCore Git 子模块：Qt Core + ICU，不依赖 Widgets
+├── core/                 # NyaEditCore Git 子模块：标准 C++17 + ICU，无 Qt 依赖
 │   ├── Encoding.*        # 编码检测、严格解码、严格编码
 │   ├── FileIO.*          # 文件加载、换行分析、原子保存
 │   ├── FileSearch.*      # 可取消的递归文件名 / 路径搜索
-│   ├── AppStorage.*      # 跨平台配置、预留系统配置、文件与文件夹历史
-│   ├── TreeSitter.*      # 可选系统 CLI 调用与语法着色区间
-│   ├── LspClient.*       # stdio LSP 客户端、文档同步和异步语言请求
 │   └── Search.*          # Unicode 搜索、正则捕获、替换
+├── qt/                   # Qt 应用服务与后端类型适配（nya_qt）
+│   ├── AppStorage.*      # 配置、系统配置、文件与文件夹历史
+│   ├── TreeSitter.*      # QProcess CLI 调度与语法区间解析
+│   ├── LspClient.*       # QProcess stdio LSP 协议、文档同步与请求生命周期
+│   └── Encoding.* / FileIO.* / Search.* / FileSearch.* # Qt 类型转换
 ├── ui/                   # 前端：Qt Widgets
 │   ├── Editor.*          # 文本视图、行号、输入、可见区高亮
 │   ├── EditorCompletion.cpp # 补全弹窗、文本编辑与交互
@@ -58,9 +60,9 @@ src/
 └── main.cpp
 ```
 
-`nya_core`、`nya_tasks` 和 `nya_widgets` 分别构建为独立静态库。UI 调用核心与任务库的普通数据接口，它们不会打开对话框或访问窗口。文件加载通过 `QtConcurrent` 调度，结果通过 `QFutureWatcher` 送回 UI；任务通过异步 `QProcess` 执行。核心与任务测试可以在没有 GUI 的环境下单独运行。详见 [架构说明](docs/architecture.md)。
+`nya_core`、`nya_qt`、`nya_tasks` 和 `nya_widgets` 分别构建为独立静态库。core 仅提供标准 C++ 后端接口，UI 经 `nya_qt` 适配层调用；Qt 配置存储与 CLI 调度由应用层负责。文件加载通过 `QtConcurrent` 调度，结果通过 `QFutureWatcher` 送回 UI；任务通过异步 `QProcess` 执行。核心与任务测试可以在没有 GUI 的环境下单独运行。详见 [架构说明](docs/architecture.md)。
 
-核心的源码、构建配置和测试位于 `src/core` 子模块，独立构建与复用方式见 [NyaEditCore](src/core/README.md)。父仓库的 `tests/` 保留界面集成测试。
+核心的源码、构建配置和测试位于 `src/core` 子模块，独立构建与复用方式见 [NyaEditCore](src/core/README.md)。父仓库的 `tests/` 保留 Qt 适配、配置、CLI 调度和界面集成测试。
 
 ## 构建
 
@@ -242,7 +244,7 @@ macOS / Linux 的任务会异步读取用户终端导出的环境，补全从桌
 - 搜索导航保留前 **20000** 个匹配；全部替换处理整个文档。复杂正则的执行时间取决于表达式和输入内容。
 - 无 BOM 的传统编码只能推测，短文本或混合语言可能误判。检测置信度只表示启发式判断，不保证正确，可手动指定编码。
 - 混合换行保存时会统一；U+2028/U+2029 分隔符文件目前拒绝打开，以避免 Qt 文档模型隐式转换造成损失。不支持二进制文件编辑。
-- 内置语法着色为基础规则，可选 Tree-sitter 着色和 LSP 补全 / 定义跳转；暂不提供诊断绘制、片段占位符或多语言服务器同时运行。核心接口见 [LSP 客户端](src/core/README.md#简单-lsp-接口)。
+- 内置语法着色为基础规则，可选 Tree-sitter 着色和 LSP 补全 / 定义跳转；暂不提供诊断绘制、片段占位符或多语言服务器同时运行。后端接口见 [NyaEditCore](src/core/README.md)。
 - 暂无崩溃恢复 / 自动备份；正常关闭时会询问是否保存。
 
 ## 发布

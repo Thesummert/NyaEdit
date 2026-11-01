@@ -3,11 +3,14 @@
 #include "TreeSitter.h"
 #include <QSet>
 #include <QTimer>
+#include <memory>
+#include <vector>
 
 namespace nya {
 class Editor;
 
-// One server per window/workspace; documents and requests follow their editor.
+// Servers are started on demand; each document follows its first enabled
+// extension match. Request IDs and failures are scoped to their server.
 class EditorLsp : public QObject {
     Q_OBJECT
 public:
@@ -24,7 +27,7 @@ signals:
     void message(const QString &text);
     void definitionsFound(nya::Editor *source, const QJsonArray &locations);
 private:
-    struct SyncedDocument { QUrl uri; QString text; int version = 1; };
+    struct SyncedDocument { LspClient *client; QUrl uri; QString text; int version = 1; };
     struct Pending {
         QPointer<Editor> editor;
         QUrl uri;
@@ -33,20 +36,26 @@ private:
         bool definition;
         bool automatic;
     };
+    struct Server {
+        LspClient *client;
+        LspServerSettings settings;
+        QString error;
+        QByteArray log;
+        QHash<qint64, Pending> pending;
+    };
+    void addServer();
+    Server *serverFor(Editor *editor) const;
     bool eligible(Editor *editor) const;
-    void ensureStarted(Editor *editor);
+    void ensureStarted(Server *server, Editor *editor);
     void cancelRequests(Editor *editor);
     void complete(Editor *editor, bool automatic);
     void requestFeature(Editor *editor, bool definition, bool automatic);
-    void receive(qint64 id, const QJsonValue &result);
-    LspClient *m_client;
+    void receive(Server *server, qint64 id, const QJsonValue &result);
+    std::vector<std::unique_ptr<Server>> m_servers;
     LanguageSettings m_settings;
     QString m_rootPath;
-    QString m_error;
-    QByteArray m_log;
     QSet<Editor *> m_editors;
     QHash<Editor *, SyncedDocument> m_documents;
-    QHash<qint64, Pending> m_pending;
     QPointer<Editor> m_current;
     QPointer<Editor> m_completionEditor;
     QTimer m_syncTimer;

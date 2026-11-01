@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -52,6 +53,20 @@ class LspWidgetTests : public QObject {
         auto cursor = editor->textCursor(); cursor.movePosition(QTextCursor::End); editor->setTextCursor(cursor);
     }
     static QJsonObject pos(int line, int character) { return {{"line", line}, {"character", character}}; }
+    static LspServerSettings server(const QString &name, const QString &extensions, const QString &mode = "ui")
+    {
+        return {name, fixtureProgram(), "--lsp-fixture " + mode, extensions, true};
+    }
+    static QJsonObject history(LspClient *client)
+    {
+        QSignalSpy replies(client, &LspClient::responseReceived);
+        if (client->request("fixture/history") < 0 || !replies.wait(3000)) return {};
+        return qvariant_cast<QJsonValue>(replies.last().at(1)).toObject();
+    }
+    static QJsonObject lastDocument(const QJsonObject &snapshot)
+    {
+        return snapshot.value("history").toArray().last().toObject().value("params").toObject().value("textDocument").toObject();
+    }
 private slots:
     void initTestCase()
     {
@@ -245,8 +260,147 @@ private slots:
         }
         MainWindow reloaded(nullptr, paths()); reloaded.newDocument();
         const auto settings = current(reloaded)->languageSettings();
-        QVERIFY(!settings.lspEnabled); QCOMPARE(settings.lspExecutable, fixtureProgram());
-        QCOMPARE(settings.lspArguments, QString("--lsp-fixture ui")); QCOMPARE(settings.lspExtensions, QString("cpp,h"));
+        QVERIFY(!settings.lspEnabled); QCOMPARE(settings.lspServers.first().executable, fixtureProgram());
+        QCOMPARE(settings.lspServers.first().arguments, QString("--lsp-fixture ui")); QCOMPARE(settings.lspServers.first().extensions, QString("cpp,h"));
+    }
+    void multipleServersRouteDocumentsAndRequests()
+    {
+        QTemporaryDir project;
+        Editor cpp, python;
+        cpp.path = project.filePath("main.CPP"); cpp.setPlainText("pri"); end(&cpp);
+        python.path = project.filePath("main.py"); python.setPlainText("pri"); end(&python);
+        EditorLsp lsp; lsp.addEditor(&cpp); lsp.addEditor(&python);
+        LanguageSettings settings; settings.lspEnabled = true;
+        settings.lspServers = {server("C++", "CPP; h", "ui-delay"), server("Python", "py"), server("Rust", "rs")};
+        lsp.configure(settings, project.path()); lsp.setCurrentEditor(&cpp);
+        const auto clients = lsp.findChildren<LspClient *>(); QCOMPARE(clients.size(), 3);
+        auto *cppClient = clients.at(0), *pythonClient = clients.at(1);
+        QTRY_VERIFY(cppClient->state() == LspClient::State::Ready);
+        QTRY_VERIFY(pythonClient->state() == LspClient::State::Ready);
+        QCOMPARE(clients.at(2)->state(), LspClient::State::Stopped); // Unused languages start on demand.
+        const auto cppHistory = history(cppClient), pythonHistory = history(pythonClient);
+        QCOMPARE(cppHistory.value("history").toArray().size(), 1);
+        QCOMPARE(pythonHistory.value("history").toArray().size(), 1);
+        QCOMPARE(lastDocument(cppHistory).value("languageId").toString(), QString("cpp"));
+        QCOMPARE(lastDocument(pythonHistory).value("languageId").toString(), QString("python"));
+        QCOMPARE(lastDocument(cppHistory).value("uri").toString(), QUrl::fromLocalFile(cpp.path).toString());
+        QCOMPARE(lastDocument(pythonHistory).value("uri").toString(), QUrl::fromLocalFile(python.path).toString());
+        QCOMPARE(cppHistory.value("initialize").toObject().value("rootUri"), QJsonValue(QUrl::fromLocalFile(project.path()).toString()));
+
+        cpp.show(); cpp.activateWindow(); cpp.setFocus(); QTRY_VERIFY(cpp.hasFocus());
+        QSignalSpy cppReplies(cppClient, &LspClient::responseReceived);
+        cpp.requestCompletion();
+        // Both clients issue the same numeric ID. An unrelated reply from Python
+        // must not consume the pending C++ completion.
+        const auto pythonId = pythonClient->request("fixture/null"); QVERIFY(pythonId >= 0);
+        QTRY_VERIFY(cpp.findChild<QListWidget *>("lspCompletionPopup") && cpp.findChild<QListWidget *>("lspCompletionPopup")->isVisible());
+        QCOMPARE(cppReplies.first().first().toLongLong(), pythonId);
+        QTest::keyClick(&cpp, Qt::Key_Return); QCOMPARE(cpp.contents(), QString("printValue"));
+        lsp.refreshEditor(&cpp, true);
+        const auto saved = history(cppClient);
+        QCOMPARE(saved.value("history").toArray().last().toObject().value("method"), QJsonValue("textDocument/didSave"));
+        QCOMPARE(history(pythonClient).value("history").toArray().size(), 1);
+
+        lsp.setCurrentEditor(&python);
+        QSignalSpy definitions(&lsp, &EditorLsp::definitionsFound);
+        python.requestDefinition(); QTRY_COMPARE(definitions.count(), 1);
+        QCOMPARE(qvariant_cast<Editor *>(definitions.first().first()), &python);
+        QCOMPARE(lsp.statusText(), QStringLiteral("LSP · 就绪")); QVERIFY(lsp.statusDetail().contains("Python"));
+
+        lsp.removeEditor(&python);
+        QCOMPARE(history(pythonClient).value("history").toArray().last().toObject().value("method"), QJsonValue("textDocument/didClose"));
+        // Saving under another language transfers document ownership.
+        cpp.path = project.filePath("renamed.py"); lsp.refreshEditor(&cpp);
+        QCOMPARE(history(cppClient).value("history").toArray().last().toObject().value("method"), QJsonValue("textDocument/didClose"));
+        const auto transferred = lastDocument(history(pythonClient));
+        QCOMPARE(transferred.value("languageId"), QJsonValue("python"));
+        QCOMPARE(transferred.value("text"), QJsonValue("printValue"));
+    }
+    void serverFailuresAreIsolatedAndSettingsCanRemoveAllServers()
+    {
+        QTemporaryDir project;
+        Editor cpp, python, unmatched;
+        cpp.path = project.filePath("main.cpp"); cpp.setPlainText("pri");
+        python.path = project.filePath("main.py"); python.setPlainText("pri"); end(&python);
+        unmatched.path = project.filePath("notes.txt");
+        EditorLsp lsp; lsp.addEditor(&cpp); lsp.addEditor(&python); lsp.addEditor(&unmatched);
+        LanguageSettings settings; settings.lspEnabled = true;
+        settings.lspServers = {server("C++", "cpp"), server("Python", "py", "ui-delay")};
+        lsp.configure(settings, project.path()); lsp.setCurrentEditor(&python);
+        const auto clients = lsp.findChildren<LspClient *>();
+        auto *cppClient = clients.at(0), *pythonClient = clients.at(1);
+        QTRY_VERIFY(cppClient->state() == LspClient::State::Ready);
+        QTRY_VERIFY(pythonClient->state() == LspClient::State::Ready);
+        python.show(); python.activateWindow(); python.setFocus(); QTRY_VERIFY(python.hasFocus());
+        python.requestCompletion(); cppClient->request("fixture/crash");
+        QTRY_VERIFY(cppClient->state() == LspClient::State::Stopped);
+        QTRY_VERIFY(python.findChild<QListWidget *>("lspCompletionPopup") && python.findChild<QListWidget *>("lspCompletionPopup")->isVisible());
+        QCOMPARE(lsp.statusText(), QStringLiteral("LSP · 就绪"));
+        lsp.setCurrentEditor(&cpp); QCOMPARE(lsp.statusText(), QStringLiteral("LSP · 异常"));
+        lsp.setCurrentEditor(&unmatched); QCOMPARE(lsp.statusText(), QStringLiteral("LSP · 等待"));
+        QVERIFY(lsp.statusDetail().contains(QStringLiteral("未匹配")));
+
+        // A disabled earlier match is skipped; among enabled matches the first wins.
+        settings.lspServers = {server("disabled", "py"), server("Python", "py"), server("duplicate", "py")};
+        settings.lspServers[0].enabled = false;
+        lsp.configure(settings, project.path()); lsp.setCurrentEditor(&python);
+        const auto reconfigured = lsp.findChildren<LspClient *>(); QCOMPARE(reconfigured.size(), 3);
+        QCOMPARE(reconfigured[0]->state(), LspClient::State::Stopped);
+        QTRY_VERIFY(reconfigured[1]->state() == LspClient::State::Ready);
+        QCOMPARE(reconfigured[2]->state(), LspClient::State::Stopped);
+        QVERIFY(lsp.statusDetail().contains("Python"));
+        settings.lspEnabled = false; lsp.configure(settings, project.path());
+        for (auto *client : reconfigured) QCOMPARE(client->state(), LspClient::State::Stopped);
+        settings.lspEnabled = true; settings.lspServers.clear(); lsp.configure(settings, project.path());
+        QCOMPARE(lsp.findChildren<LspClient *>().size(), 0);
+        QCOMPARE(lsp.statusText(), QStringLiteral("LSP · 等待"));
+    }
+    void multipleServerSettingsApplyCancelAndPersist()
+    {
+        QVERIFY(configure());
+        {
+            MainWindow window(nullptr, paths()); window.newDocument();
+            auto *action = window.findChild<QAction *>("actionLanguageSettings");
+            QTimer::singleShot(0, [&] {
+                auto *dialog = qobject_cast<LanguageSettingsDialog *>(QApplication::activeModalWidget());
+                dialog->findChild<QLineEdit *>("lspServerName")->setText("C++");
+                dialog->findChild<QPushButton *>("lspAddServer")->click();
+                dialog->findChild<QLineEdit *>("lspServerName")->setText("Python");
+                dialog->findChild<QLineEdit *>("lspExecutable")->setText(fixtureProgram());
+                dialog->findChild<QLineEdit *>("lspArguments")->setText("--lsp-fixture ui-delay");
+                dialog->findChild<QLineEdit *>("lspExtensions")->setText("py,pyw");
+                dialog->findChild<QCheckBox *>("lspServerEnabled")->setChecked(false);
+                auto *list = dialog->findChild<QListWidget *>("lspServers"); list->setCurrentRow(0);
+                QCOMPARE(dialog->findChild<QLineEdit *>("lspServerName")->text(), QString("C++"));
+                list->setCurrentRow(1);
+                QCOMPARE(dialog->findChild<QLineEdit *>("lspExtensions")->text(), QString("py,pyw"));
+                dialog->accept();
+            }); action->trigger();
+            const auto settings = current(window)->languageSettings(); QCOMPARE(settings.lspServers.size(), 2);
+            QCOMPARE(settings.lspServers[0].name, QString("C++"));
+            QCOMPARE(settings.lspServers[1].name, QString("Python")); QVERIFY(!settings.lspServers[1].enabled);
+            QTimer::singleShot(0, [&] {
+                auto *dialog = qobject_cast<LanguageSettingsDialog *>(QApplication::activeModalWidget());
+                dialog->findChild<QPushButton *>("lspRemoveServer")->click(); dialog->reject();
+            }); action->trigger();
+            QCOMPARE(current(window)->languageSettings().lspServers.size(), 2);
+        }
+        {
+            MainWindow reloaded(nullptr, paths()); reloaded.newDocument();
+            const auto servers = current(reloaded)->languageSettings().lspServers; QCOMPARE(servers.size(), 2);
+            QCOMPARE(servers[0].extensions, QString("cpp,h")); QCOMPARE(servers[1].executable, fixtureProgram());
+            QCOMPARE(servers[1].arguments, QString("--lsp-fixture ui-delay"));
+            QCOMPARE(servers[1].extensions, QString("py,pyw")); QVERIFY(!servers[1].enabled);
+            QTimer::singleShot(0, [&] {
+                auto *dialog = qobject_cast<LanguageSettingsDialog *>(QApplication::activeModalWidget());
+                auto *remove = dialog->findChild<QPushButton *>("lspRemoveServer"); remove->click(); remove->click();
+                QCOMPARE(dialog->findChild<QListWidget *>("lspServers")->count(), 0); QVERIFY(!remove->isEnabled());
+                dialog->accept();
+            }); reloaded.findChild<QAction *>("actionLanguageSettings")->trigger();
+            QVERIFY(current(reloaded)->languageSettings().lspServers.isEmpty());
+        }
+        MainWindow empty(nullptr, paths()); empty.newDocument();
+        QVERIFY(current(empty)->languageSettings().lspServers.isEmpty()); // Do not resurrect the legacy entry.
     }
     void realClangdCompletionAndDefinition()
     {

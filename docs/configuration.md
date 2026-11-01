@@ -77,9 +77,13 @@ blur=0
 
 `language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。`language/treeSitterConfigPath` 可指定 Tree-sitter 的 `config.json`，留空使用 CLI 默认配置；建议填写绝对路径。在“设置 → 语言支持…”中确认后应用到所有已打开文档，并供新文档和重启后使用；取消不会修改设置，清除历史不会重置语言支持。语言解析器及其高亮规则由用户现有的 Tree-sitter 配置提供，NyaEdit 不自动安装。
 
-`language/lspEnabled` 开启 LSP 补全与定义跳转，默认关闭，独立于 Tree-sitter。`language/lspExecutable` 为语言服务器程序名称或完整路径，默认 `clangd`；通过 PATH 查找，macOS 额外检查 Homebrew / MacPorts 的常见目录。`language/lspArguments` 为启动参数，使用 Qt 的参数拆分规则，含空格的参数用双引号包围，按参数直接启动进程；不要填写 shell 管道或重定向。`language/lspExtensions` 为适用文件后缀，默认 `c,cpp,cc,cxx,h,hpp,hxx`，不区分大小写，可用逗号、分号或空格分隔，不带前导点。Python 示例为 `lspExecutable=pylsp`、`lspExtensions=py`；需要先自行安装语言服务器。
+`language/lspEnabled` 开启 LSP 补全与定义跳转，默认关闭，独立于 Tree-sitter。确认“设置 → 语言支持…”后，`language/lspServers` 以 QSettings 的列表格式保存所有服务器，每项包含 `name`（名称）、`executable`（程序）、`arguments`（启动参数）、`extensions`（适用后缀）和 `enabled`（单独启用，默认 `true`）。可通过界面的“添加服务器”“删除服务器”管理列表；删除全部服务器会保存空列表，重启后不会恢复旧项。
 
-确认语言支持设置后，保存上述配置并重新连接服务器；取消保持原会话。关闭 LSP 开关会立即停止服务器；打开匹配的已保存文件后才会启动。每窗口一个 stdio 会话，项目根目录为当前打开的文件夹，否则为启动会话时首个代码文件所在目录。未命名文档、大文件模式和超过约 200 万 UTF-16 单元的文本跳过同步。LSP 状态常驻左下角，错误不弹出阻塞对话框；悬停查看详情，点击修改配置并重连。
+默认服务器为 `clangd`，后缀 `c,cpp,cc,cxx,h,hpp,hxx`。程序可填写名称或完整路径，通过 PATH 查找，macOS 额外检查 Homebrew / MacPorts 的常见目录。启动参数使用 Qt 的参数拆分规则，含空格的参数用双引号包围，按参数直接启动进程；不要填写 shell 管道或重定向。后缀不区分大小写，可用逗号、分号或空格分隔，不带前导点；后缀重复时使用列表中首个已启用的匹配项。可同时添加 Python（程序 `pylsp`、后缀 `py`）、Rust（程序 `rust-analyzer`、后缀 `rs`）等服务器，需要先自行安装工具。
+
+上面的 `lspExecutable`、`lspArguments`、`lspExtensions` 是旧版单服务器配置；缺少 `lspServers` 时会将其作为首个服务器读取，已有程序、参数和后缀保持不变。保存新列表后以新列表为准。
+
+确认语言支持设置后，保存配置并重新连接所有服务器；取消保持原会话。关闭 LSP 总开关会立即停止所有服务器；各服务器在打开匹配的已保存文件后按需启动，每组配置在窗口内拥有独立的 stdio 会话，多种语言可同时运行。项目根目录为当前打开的文件夹，否则为各服务器启动时首个匹配文件所在目录。未命名文档、大文件模式和超过约 200 万 UTF-16 单元的文本跳过同步。LSP 状态随当前标签显示对应服务器，错误仅影响该服务器，不弹出阻塞对话框；悬停查看详情，点击修改配置并重连。
 
 `animation/interface` 控制侧栏收放、文件树节点展开 / 收起、搜索面板展开 / 收起和页面切换；`animation/cursor` 控制光标平滑移动与渐变闪烁；`animation/selection` 控制选择高亮渐变。三个开关默认均为 `true`，相互独立。`animation/speed` 为速度倍率，默认 `1`，支持 `0.25–3`，数值越大越快。在“设置 → 动画设置…”中确认后立即保存并应用到所有文档；取消不会修改设置，清除历史也不会重置动画。旧配置缺少这些键时自动补齐默认值。选区在动画关闭或编辑器失去焦点时仍使用高对比颜色。
 

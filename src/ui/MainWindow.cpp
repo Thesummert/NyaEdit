@@ -99,9 +99,22 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     m_languages.executable = m_storage->value("language/treeSitterExecutable", "tree-sitter").toString();
     m_languages.configPath = m_storage->value("language/treeSitterConfigPath").toString();
     m_languages.lspEnabled = m_storage->value("language/lspEnabled", false).toBool();
-    m_languages.lspExecutable = m_storage->value("language/lspExecutable", "clangd").toString();
-    m_languages.lspArguments = m_storage->value("language/lspArguments").toString();
-    m_languages.lspExtensions = m_storage->value("language/lspExtensions", "c,cpp,cc,cxx,h,hpp,hxx").toString();
+    const auto storedServers = m_storage->value("language/lspServers");
+    if (storedServers.isValid()) {
+        m_languages.lspServers.clear();
+        for (const auto &value : storedServers.toList()) {
+            const auto server = value.toMap();
+            m_languages.lspServers.append({server.value("name").toString(), server.value("executable").toString(),
+                server.value("arguments").toString(), server.value("extensions").toString(), server.value("enabled", true).toBool()});
+        }
+    } else {
+        // Preserve the single-server settings saved by earlier versions.
+        auto &server = m_languages.lspServers.first();
+        server.executable = m_storage->value("language/lspExecutable", "clangd").toString();
+        server.arguments = m_storage->value("language/lspArguments").toString();
+        server.extensions = m_storage->value("language/lspExtensions", server.extensions).toString();
+        server.name = server.executable;
+    }
     m_lsp = new EditorLsp(this);
     connect(m_lsp, &EditorLsp::statusChanged, this, &MainWindow::updateLspStatus);
     connect(m_lsp, &EditorLsp::message, this, [this](const QString &message) { statusBar()->showMessage(message, 8000); });
@@ -1261,9 +1274,11 @@ void MainWindow::chooseLanguageSettings()
     m_storage->setValue("language/treeSitterExecutable", m_languages.executable);
     m_storage->setValue("language/treeSitterConfigPath", m_languages.configPath);
     m_storage->setValue("language/lspEnabled", m_languages.lspEnabled);
-    m_storage->setValue("language/lspExecutable", m_languages.lspExecutable);
-    m_storage->setValue("language/lspArguments", m_languages.lspArguments);
-    m_storage->setValue("language/lspExtensions", m_languages.lspExtensions);
+    QVariantList servers;
+    for (const auto &server : m_languages.lspServers)
+        servers.append(QVariantMap{{"name", server.name}, {"executable", server.executable},
+            {"arguments", server.arguments}, {"extensions", server.extensions}, {"enabled", server.enabled}});
+    m_storage->setValue("language/lspServers", servers);
     for (int i = 0; i < m_tabs->count(); ++i)
         qobject_cast<Editor *>(m_tabs->widget(i))->setLanguageSettings(m_languages);
     updateTreeSitterStatus();

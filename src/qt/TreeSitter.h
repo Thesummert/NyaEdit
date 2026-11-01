@@ -5,14 +5,19 @@
 #include <QVector>
 
 namespace nya {
+struct LspServerSettings {
+    QString name = QStringLiteral("C/C++");
+    QString executable = QStringLiteral("clangd");
+    QString arguments;
+    QString extensions = QStringLiteral("c,cpp,cc,cxx,h,hpp,hxx");
+    bool enabled = true;
+};
 struct LanguageSettings {
     bool treeSitterEnabled = false;
     QString executable = QStringLiteral("tree-sitter");
     QString configPath;
     bool lspEnabled = false;
-    QString lspExecutable = QStringLiteral("clangd");
-    QString lspArguments = {};
-    QString lspExtensions = QStringLiteral("c,cpp,cc,cxx,h,hpp,hxx");
+    QVector<LspServerSettings> lspServers = {LspServerSettings{}};
 };
 struct SyntaxSpan {
     int start = 0;

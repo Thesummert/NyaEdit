@@ -212,7 +212,7 @@ void MainWindow::setupWorkspace()
     m_folderLabel = new QLabel(QStringLiteral("文件夹")); m_folderLabel->setObjectName("sectionLabel");
     m_folderLabel->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_folderLabel, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
-        if (!m_folderRoot.isEmpty()) showFileContextMenu(m_folderRoot, m_folderLabel->mapToGlobal(position));
+        if (!m_folderRoot.isEmpty()) showFileContextMenu(m_folderRoot, m_folderLabel->mapToGlobal(position), true);
     });
     folderRow->addWidget(m_folderLabel, 1);
     auto *folderButton = button("+", QStringLiteral("打开文件夹"), m_sidebar);
@@ -269,7 +269,7 @@ void MainWindow::setupWorkspace()
     m_fileSearchResults->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_fileSearchResults, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         if (const auto *item = m_fileSearchResults->itemAt(position))
-            showFileContextMenu(item->data(Qt::UserRole).toString(), m_fileSearchResults->viewport()->mapToGlobal(position));
+            showFileContextMenu(item->data(Qt::UserRole).toString(), m_fileSearchResults->viewport()->mapToGlobal(position), true);
     });
     m_files = new QFileSystemModel(this);
     m_files->setReadOnly(true); m_files->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
@@ -285,8 +285,10 @@ void MainWindow::setupWorkspace()
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_tree, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         const auto index = m_tree->indexAt(position);
-        if (index.isValid()) showFileContextMenu(m_files->filePath(index), m_tree->viewport()->mapToGlobal(position));
+        showFileContextMenu(index.isValid() ? m_files->filePath(index) : m_folderRoot,
+            m_tree->viewport()->mapToGlobal(position), true, !index.isValid());
     });
+    setupFileActions();
     m_folderHint = new QLabel(QStringLiteral("打开文件夹，\n让文件触手可及。")); m_folderHint->setObjectName("hint");
     side->addWidget(m_folderHint); side->addStretch();
     auto *footer = new QLabel(QStringLiteral("N Y A E D I T   /   0.1")); footer->setObjectName("hint"); side->addWidget(footer);
@@ -946,26 +948,6 @@ void MainWindow::runFileSearch()
 void MainWindow::openFileSearchResult()
 {
     if (const auto *item = m_fileSearchResults->currentItem()) openPath(item->data(Qt::UserRole).toString());
-}
-
-void MainWindow::showFileContextMenu(const QString &path, const QPoint &globalPosition)
-{
-    QMenu menu(this); menu.setObjectName("fileContextMenu");
-#ifdef Q_OS_MAC
-    const auto text = QStringLiteral("在 Finder 中显示");
-#elif defined(Q_OS_WIN)
-    const auto text = QStringLiteral("在文件资源管理器中显示");
-#else
-    const auto text = QStringLiteral("在文件管理器中打开");
-#endif
-    auto *reveal = menu.addAction(Theme::icon("folder"), text);
-    reveal->setObjectName("actionRevealInFileManager"); reveal->setData(path);
-    reveal->setEnabled(!path.isEmpty() && QFileInfo::exists(path));
-    reveal->setToolTip(path.isEmpty() ? QStringLiteral("请先保存文档")
-        : !QFileInfo::exists(path) ? QStringLiteral("文件或文件夹已不存在") : path);
-    // Copy the clicked path; opening the menu must not depend on the current tab.
-    connect(reveal, &QAction::triggered, this, [this, path] { revealInFileManager(path); });
-    menu.exec(globalPosition);
 }
 
 void MainWindow::revealInFileManager(const QString &path)

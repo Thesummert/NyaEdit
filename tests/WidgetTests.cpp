@@ -13,6 +13,7 @@
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QClipboard>
 #include <QContextMenuEvent>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -23,6 +24,8 @@
 #include <QFontComboBox>
 #include <QFontDatabase>
 #include <QLineEdit>
+#include <QInputDialog>
+#include <QMimeData>
 #include <QListWidget>
 #include <QLabel>
 #include <QJsonArray>
@@ -98,6 +101,37 @@ class WidgetTests : public QObject {
         QString path;
         QString tooltip;
     };
+    static bool fileAction(MainWindow &window, const QString &path, const char *name, const std::function<void()> &dialog = {})
+    {
+        auto *tree = window.findChild<FileTreeView *>("fileTree");
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        const auto index = model->index(path);
+        tree->scrollTo(index);
+        bool enabled = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (!menu) return;
+            auto *action = menu->findChild<QAction *>(name);
+            enabled = action && action->isEnabled();
+            menu->close();
+            if (enabled) {
+                if (dialog) QTimer::singleShot(0, &window, dialog);
+                action->trigger();
+            }
+        });
+        const QPoint position = path == model->rootPath() ? QPoint(10, tree->viewport()->height() - 5)
+            : tree->visualRect(index).center();
+        tree->customContextMenuRequested(position);
+        return enabled;
+    }
+    static std::function<void()> enterName(const QString &name)
+    {
+        return [name] {
+            if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+                dialog->setTextValue(name); dialog->accept();
+            }
+        };
+    }
     static ContextAction activateReveal(MainWindow &window, QWidget *target, const QPoint &position)
     {
         ContextAction result;
@@ -118,6 +152,202 @@ class WidgetTests : public QObject {
         return result;
     }
 private slots:
+    void shiftDeleteConfirmsAndProtectsUnsavedDocuments()
+    {
+        QTemporaryDir files; QString error;
+        const auto path = files.filePath("delete.txt");
+        QVERIFY(saveFile(path, "original", {}, LineEnding::LF, &error));
+        MainWindow window(nullptr, testPaths()); window.show(); window.activateWindow();
+        window.openFolder(files.path()); window.openPath(path);
+        auto *tree = window.findChild<FileTreeView *>("fileTree");
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        auto *tabs = window.findChild<QTabWidget *>();
+        QTRY_VERIFY(tabs->count() == 1 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        QTRY_COMPARE(model->rowCount(tree->rootIndex()), 1);
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget()); editor->insertPlainText("unsaved");
+        tree->setCurrentIndex(model->index(path)); tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
+        bool confirmed = false;
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+            confirmed = box->windowTitle() == QStringLiteral("永久删除") && box->text().contains(QStringLiteral("无法恢复"));
+            QCOMPARE(box->defaultButton(), box->button(QMessageBox::No)); box->button(QMessageBox::No)->click();
+        });
+        QTest::keyClick(tree, Qt::Key_Delete, Qt::ShiftModifier);
+        QVERIFY(confirmed); QVERIFY(QFileInfo::exists(path)); QVERIFY(editor->dirty());
+        window.activateWindow(); tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+            QTimer::singleShot(0, [] {
+                auto *save = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(save);
+                QCOMPARE(save->windowTitle(), QStringLiteral("保存更改")); save->button(QMessageBox::Cancel)->click();
+            });
+            box->button(QMessageBox::Yes)->click();
+        });
+        QTest::keyClick(tree, Qt::Key_Delete, Qt::ShiftModifier);
+        QVERIFY(QFileInfo::exists(path)); QCOMPARE(tabs->count(), 1); QVERIFY(editor->dirty());
+        window.activateWindow(); tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+            QTimer::singleShot(0, [] {
+                auto *save = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(save);
+                save->button(QMessageBox::Discard)->click();
+            });
+            box->button(QMessageBox::Yes)->click();
+        });
+        QTest::keyClick(tree, Qt::Key_Delete, Qt::ShiftModifier);
+        QVERIFY(!QFileInfo::exists(path)); QCOMPARE(tabs->count(), 0);
+        window.close();
+    }
+
+    void shiftMenuPermanentlyDeletesDirectoryWithoutFollowingSymlinks()
+    {
+        QTemporaryDir files; QString error;
+        const auto folder = files.filePath("folder"), keep = files.filePath("keep");
+        QVERIFY(QDir().mkpath(folder + "/nested")); QVERIFY(QDir().mkdir(keep));
+        QVERIFY(saveFile(folder + "/nested/file.txt", "delete", {}, LineEnding::LF, &error));
+        QVERIFY(saveFile(keep + "/file.txt", "preserve", {}, LineEnding::LF, &error));
+#ifndef Q_OS_WIN
+        QVERIFY(QFile::link(keep, folder + "/link"));
+#endif
+        MainWindow window(nullptr, testPaths()); window.show(); window.activateWindow(); window.openFolder(files.path());
+        auto *tree = window.findChild<FileTreeView *>("fileTree");
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        QTRY_COMPARE(model->rowCount(tree->rootIndex()), 2);
+        tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
+        bool permanent = false;
+        QTimer::singleShot(0, [&] {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget()); QVERIFY(menu);
+            auto *remove = menu->findChild<QAction *>("actionTrashFile"); QVERIFY(remove);
+            QTimer::singleShot(0, [&] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+                permanent = box->windowTitle() == QStringLiteral("永久删除"); box->button(QMessageBox::Yes)->click();
+            });
+            QTest::mouseClick(menu, Qt::LeftButton, Qt::ShiftModifier, menu->actionGeometry(remove).center());
+        });
+        tree->customContextMenuRequested(tree->visualRect(model->index(folder)).center());
+        QVERIFY(permanent); QVERIFY(!QFileInfo::exists(folder));
+        QCOMPARE(loadFile(keep + "/file.txt").text, QStringLiteral("preserve"));
+        window.close();
+    }
+
+    void fileTreeCreatesFilesFoldersAndProtectsExistingFiles()
+    {
+        QTemporaryDir files;
+        MainWindow window(nullptr, testPaths()); window.show(); window.openFolder(files.path());
+        auto *tree = window.findChild<FileTreeView *>("fileTree");
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        QTRY_COMPARE(model->rootPath(), files.path());
+        QVERIFY(fileAction(window, files.path(), "actionNewFolder", enterName(QStringLiteral("新目录"))));
+        const auto folder = files.filePath(QStringLiteral("新目录")); QVERIFY(QFileInfo(folder).isDir());
+        QTRY_COMPARE(model->rowCount(tree->rootIndex()), 1);
+        QVERIFY(fileAction(window, folder, "actionNewFile", enterName(QStringLiteral("笔记.md"))));
+        const auto path = QDir(folder).filePath(QStringLiteral("笔记.md")); QVERIFY(QFileInfo(path).isFile());
+        auto *tabs = window.findChild<QTabWidget *>();
+        QTRY_VERIFY(tabs->count() == 1 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        QCOMPARE(qobject_cast<Editor *>(tabs->currentWidget())->path, path);
+        QVERIFY(fileAction(window, folder, "actionNewFile", [=] {
+            QTimer::singleShot(0, [] { if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) box->accept(); });
+            enterName(QStringLiteral("笔记.md"))();
+        }));
+        QCOMPARE(QFileInfo(path).size(), 0);
+        QVERIFY(fileAction(window, path, "actionCopyFilePath")); QCOMPARE(qApp->clipboard()->text(), QDir::toNativeSeparators(path));
+        QVERIFY(!fileAction(window, files.path(), "actionRenameFile"));
+        QVERIFY(!fileAction(window, files.path(), "actionTrashFile"));
+        window.close();
+    }
+
+    void fileTreeRenameAndMoveKeepDirtyEditorsAndUpdatePaths()
+    {
+        QTemporaryDir files; QString error;
+        const auto folder = files.filePath("source"), target = files.filePath("target");
+        QVERIFY(QDir().mkdir(folder)); QVERIFY(QDir().mkdir(target));
+        const auto original = QDir(folder).filePath("notes.txt");
+        QVERIFY(saveFile(original, "disk content", {}, LineEnding::LF, &error));
+        MainWindow window(nullptr, testPaths()); window.show(); window.openFolder(files.path()); window.openPath(original);
+        auto *tabs = window.findChild<QTabWidget *>();
+        QTRY_VERIFY(tabs->count() == 1 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget()); editor->insertPlainText("unsaved ");
+        const auto contents = editor->toPlainText(); QVERIFY(editor->dirty());
+        auto *tree = window.findChild<FileTreeView *>("fileTree"); auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        QTRY_COMPARE(model->rowCount(tree->rootIndex()), 2);
+        QVERIFY(fileAction(window, folder, "actionRenameFile", enterName(QStringLiteral("重命名"))));
+        const auto renamed = files.filePath(QStringLiteral("重命名"));
+        QCOMPARE(editor->path, QDir(renamed).filePath("notes.txt")); QVERIFY(!QFileInfo::exists(folder));
+        QVERIFY(editor->dirty()); QCOMPARE(editor->toPlainText(), contents);
+        QTRY_VERIFY(model->index(renamed).isValid());
+        QVERIFY(fileAction(window, renamed, "actionCutFile"));
+        QVERIFY(fileAction(window, target, "actionPasteFile"));
+        const auto moved = QDir(target).filePath(QStringLiteral("重命名/notes.txt"));
+        QCOMPARE(editor->path, moved); QVERIFY(QFileInfo::exists(moved)); QVERIFY(!QFileInfo::exists(renamed));
+        QVERIFY(editor->dirty()); QCOMPARE(editor->toPlainText(), contents);
+        QVERIFY(!qApp->clipboard()->mimeData() || qApp->clipboard()->mimeData()->urls().isEmpty());
+        window.findChild<QAction *>("actionSave")->trigger();
+        QVERIFY(!editor->dirty()); QCOMPARE(loadFile(moved).text, contents);
+        window.close();
+    }
+
+    void fileTreeCopiesDirectoriesHiddenFilesAndAvoidsOverwrite()
+    {
+        QTemporaryDir files; QString error;
+        const auto folder = files.filePath("source"), target = files.filePath("target");
+        QVERIFY(QDir().mkpath(folder + "/nested")); QVERIFY(QDir().mkdir(target));
+        QVERIFY(saveFile(folder + "/nested/file.txt", "hello", {}, LineEnding::LF, &error));
+        QVERIFY(saveFile(folder + "/.hidden", "hidden", {}, LineEnding::LF, &error));
+        MainWindow window(nullptr, testPaths()); window.show(); window.openFolder(files.path());
+        auto *tree = window.findChild<FileTreeView *>("fileTree"); auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        QTRY_COMPARE(model->rowCount(tree->rootIndex()), 2);
+        QVERIFY(fileAction(window, folder, "actionCopyFile"));
+        QCOMPARE(qApp->clipboard()->mimeData()->urls().first(), QUrl::fromLocalFile(folder));
+        QVERIFY(fileAction(window, target, "actionPasteFile"));
+        QCOMPARE(loadFile(target + "/source/nested/file.txt").text, QStringLiteral("hello"));
+        QCOMPARE(loadFile(target + "/source/.hidden").text, QStringLiteral("hidden"));
+        QVERIFY(fileAction(window, target, "actionPasteFile"));
+        QCOMPARE(loadFile(target + QStringLiteral("/source - 副本/.hidden")).text, QStringLiteral("hidden"));
+        QVERIFY(QFileInfo::exists(folder + "/.hidden"));
+        QVERIFY(fileAction(window, folder, "actionPasteFile", [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) box->accept();
+        }));
+        QVERIFY(!QFileInfo::exists(folder + "/source"));
+        QCOMPARE(QDir(target).entryList({".nya-copy-*"}, QDir::Dirs | QDir::Hidden).size(), 0);
+        QVERIFY(fileAction(window, folder, "actionTrashFile", [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) box->done(QMessageBox::No);
+        }));
+        QVERIFY(QFileInfo::exists(folder));
+        window.close();
+    }
+
+    void fileTreeRejectsInvalidNamesAndCleansFailedCopies()
+    {
+        QTemporaryDir files; QString error;
+        const auto folder = files.filePath("source"), target = files.filePath("target");
+        QVERIFY(QDir().mkdir(folder)); QVERIFY(QDir().mkdir(target));
+        QVERIFY(saveFile(folder + "/a.txt", "preserve", {}, LineEnding::LF, &error));
+        MainWindow window(nullptr, testPaths()); window.show(); window.openFolder(files.path());
+        auto *tree = window.findChild<FileTreeView *>("fileTree"); auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        QTRY_COMPARE(model->rowCount(tree->rootIndex()), 2);
+        const auto dismissWarning = [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) box->accept();
+        };
+        QVERIFY(fileAction(window, folder, "actionNewFile", [=] {
+            QTimer::singleShot(0, dismissWarning); enterName("../outside.txt")();
+        }));
+        QVERIFY(!QFileInfo::exists(files.filePath("outside.txt")));
+        QVERIFY(fileAction(window, folder, "actionRenameFile", [=] {
+            QTimer::singleShot(0, dismissWarning); enterName("target")();
+        }));
+        QVERIFY(QFileInfo::exists(folder + "/a.txt"));
+#ifndef Q_OS_WIN
+        QVERIFY(QFile::link(folder + "/a.txt", folder + "/z-link"));
+        // The standard file URL clipboard also works without our copy action.
+        auto *data = new QMimeData; data->setUrls({QUrl::fromLocalFile(folder)}); qApp->clipboard()->setMimeData(data);
+        QVERIFY(fileAction(window, target, "actionPasteFile", dismissWarning));
+        QVERIFY(!QFileInfo::exists(target + "/source"));
+        QCOMPARE(QDir(target).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).size(), 0);
+        QCOMPARE(loadFile(folder + "/a.txt").text, QStringLiteral("preserve"));
+#endif
+        window.close();
+    }
+
     void markdownPreviewRendersAndFollowsCurrentDocument()
     {
         MainWindow window(nullptr, testPaths()); window.show();

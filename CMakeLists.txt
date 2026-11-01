@@ -57,6 +57,7 @@ add_library(nya_widgets STATIC
     src/ui/Highlighter.cpp src/ui/Highlighter.h
     src/ui/LanguageSettingsDialog.cpp src/ui/LanguageSettingsDialog.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
+    src/ui/MainWindowFiles.cpp
     src/ui/TaskPanel.cpp src/ui/TaskPanel.h
     src/ui/WelcomePage.cpp src/ui/WelcomePage.h
     src/ui/Theme.cpp src/ui/Theme.h)

@@ -117,7 +117,16 @@ private:
     void scheduleFileSearch();
     void runFileSearch();
     void openFileSearchResult();
-    void showFileContextMenu(const QString &path, const QPoint &globalPosition);
+    void showFileContextMenu(const QString &path, const QPoint &globalPosition, bool manageFiles = false, bool blank = false);
+    void setupFileActions();
+    void createTreeEntry(const QString &path, bool directory);
+    void renameTreeEntry(const QString &path);
+    void copyTreeEntry(const QString &path, bool cut);
+    void pasteTreeEntry(const QString &path);
+    void deleteTreeEntry(const QString &path, bool permanent = false);
+    bool treeEntryBusy(const QString &path);
+    void relocateEditors(const QString &from, const QString &to);
+    void refreshTreeEntry(const QString &path);
 
     QTabWidget *m_tabs = nullptr;
     QDockWidget *m_markdownDock = nullptr;

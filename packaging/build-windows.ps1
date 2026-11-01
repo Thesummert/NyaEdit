@@ -14,7 +14,10 @@ if (!(Test-Path $deploy) -or !(Test-Path $Nsis)) { throw 'windeployqt.exe or mak
 $match = [regex]::Match((Get-Content (Join-Path $root 'CMakeLists.txt') -Raw), 'project\(NyaEdit\s+VERSION\s+([0-9.]+)')
 if (!$match.Success) { throw 'Cannot determine project version.' }
 $version = $match.Groups[1].Value
-& cmake --build $build --config Release --target NyaEdit
+# Rebuild all objects because localized MSVC output can leave Ninja with
+# incomplete header dependencies and cause incompatible objects to be linked.
+$env:VSLANG = '1033'
+& cmake --build $build --config Release --target NyaEdit --clean-first
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 $exe = Join-Path $build 'NyaEdit.exe'
 if (!(Test-Path $exe)) { $exe = Join-Path $build 'Release/NyaEdit.exe' }

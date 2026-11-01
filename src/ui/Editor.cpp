@@ -3,12 +3,15 @@
 #include "Highlighter.h"
 #include <QFontDatabase>
 #include <QApplication>
+#include <QDesktopServices>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QListWidget>
 #include <QPainter>
 #include <QScrollBar>
 #include <QTextBlock>
+#include <QTextBrowser>
+#include <QUrl>
 #include <QWheelEvent>
 #include <algorithm>
 
@@ -92,7 +95,48 @@ QString Editor::contents() const
     text.replace(QChar::LineSeparator, QChar('\n'));
     return text;
 }
-void Editor::setLanguage(const QString &suffix) { m_highlighter->setLanguage(largeFile ? QString() : suffix); }
+void Editor::setLanguage(const QString &suffix)
+{
+    const auto ext = suffix.toLower();
+    const bool wasMarkdown = m_markdown;
+    m_markdown = ext == "md" || ext == "markdown";
+    if (!m_markdown && isMarkdownPreviewVisible()) setMarkdownPreviewVisible(false);
+    m_highlighter->setLanguage(largeFile ? QString() : suffix);
+    if (wasMarkdown != m_markdown) emit markdownStateChanged();
+}
+bool Editor::isMarkdownPreviewVisible() const
+{
+    return m_markdownPreview && !m_markdownPreview->isHidden();
+}
+void Editor::setMarkdownPreviewVisible(bool visible)
+{
+    if (visible && (!m_markdown || loading)) return;
+    if (visible == isMarkdownPreviewVisible()) return;
+    if (visible && !m_markdownPreview) {
+        // Cover the source widget without replacing its document or undo history.
+        m_markdownPreview = new QTextBrowser(this);
+        m_markdownPreview->setObjectName("inlineMarkdownPreview");
+        m_markdownPreview->setFont(qApp->font());
+        m_markdownPreview->setFrameShape(QFrame::NoFrame);
+        m_markdownPreview->document()->setDocumentMargin(20);
+        m_markdownPreview->setOpenLinks(false);
+        connect(m_markdownPreview, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
+            if (url.isRelative() && url.path().isEmpty() && url.hasFragment())
+                m_markdownPreview->scrollToAnchor(url.fragment());
+            else if (url.scheme() == "http" || url.scheme() == "https" || url.scheme() == "mailto")
+                QDesktopServices::openUrl(url);
+        });
+    }
+    setReadOnly(visible || loading);
+    hideCompletions();
+    setFocusProxy(visible ? m_markdownPreview : nullptr);
+    if (visible) {
+        m_markdownPreview->setGeometry(rect());
+        m_markdownPreview->show(); m_markdownPreview->raise();
+    } else m_markdownPreview->hide();
+    setFocus();
+    emit markdownStateChanged();
+}
 void Editor::setLanguageSettings(const LanguageSettings &settings) { m_highlighter->setLanguageSettings(settings); }
 LanguageSettings Editor::languageSettings() const { return m_highlighter->languageSettings(); }
 TreeSitterStatus Editor::treeSitterStatus() const { return m_highlighter->treeSitterStatus(); }
@@ -256,6 +300,7 @@ void Editor::hideEvent(QHideEvent *event)
 void Editor::resizeEvent(QResizeEvent *event)
 {
     QPlainTextEdit::resizeEvent(event);
+    if (m_markdownPreview) m_markdownPreview->setGeometry(rect());
     m_gutter->setGeometry(QRect(contentsRect().left(), contentsRect().top(), gutterWidth(), contentsRect().height()));
     updateAnimatedCursor(false);
 }

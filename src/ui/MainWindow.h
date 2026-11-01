@@ -192,6 +192,7 @@ private:
     QToolButton *m_encoding = nullptr;
     QToolButton *m_ending = nullptr;
     QToolButton *m_zoom = nullptr;
+    QToolButton *m_markdownToggle = nullptr;
     QAction *m_saveAction = nullptr;
     QAction *m_undoAction = nullptr;
     QAction *m_redoAction = nullptr;

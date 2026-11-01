@@ -373,33 +373,38 @@ void MainWindow::setupMarkdownPreview()
     connect(m_markdownTimer, &QTimer::timeout, this, &MainWindow::updateMarkdownPreview);
     connect(m_markdownDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
         if (visible) { m_markdownRevision = -2; updateMarkdownPreview(); }
-        else m_markdownTimer->stop();
+        else if (!current() || !current()->isMarkdownPreviewVisible()) m_markdownTimer->stop();
     });
 }
 
 void MainWindow::updateMarkdownPreview()
 {
-    if (!m_markdownDock->isVisible()) return;
     auto *editor = current();
+    QList<QTextBrowser *> previews;
+    if (m_markdownDock->isVisible()) previews.append(m_markdownPreview);
+    if (editor && editor->isMarkdownPreviewVisible()) previews.append(editor->markdownPreview());
+    if (previews.isEmpty()) return;
     const int revision = editor ? editor->document()->revision() : -1;
     const QString path = editor ? editor->path : QString();
     const bool loading = editor && editor->loading;
     if (m_markdownEditor == editor && m_markdownRevision == revision
         && m_markdownPath == path && m_markdownLoading == loading) return;
     const bool sameDocument = m_markdownEditor == editor && m_markdownPath == path;
-    const int scroll = sameDocument ? m_markdownPreview->verticalScrollBar()->value() : 0;
     m_markdownEditor = editor; m_markdownRevision = revision;
     m_markdownPath = path; m_markdownLoading = loading;
-    // Resolve relative images beside the saved document, never beside a previous tab.
-    m_markdownPreview->document()->setBaseUrl(path.isEmpty() ? QUrl()
-        : QUrl::fromLocalFile(QFileInfo(path).absolutePath() + QDir::separator()));
-    if (!editor) m_markdownPreview->setPlainText(QStringLiteral("打开或新建文档以预览 Markdown。"));
-    else if (loading) m_markdownPreview->setPlainText(QStringLiteral("正在读取文件…"));
-    else if (editor->document()->characterCount() > 2 * 1024 * 1024)
-        m_markdownPreview->setPlainText(QStringLiteral("文档过大，已暂停 Markdown 预览（上限约 200 万字符）。"));
-    else m_markdownPreview->document()->setMarkdown(editor->toPlainText(),
-        QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) | QTextDocument::MarkdownNoHTML);
-    m_markdownPreview->verticalScrollBar()->setValue(scroll);
+    for (auto *preview : previews) {
+        const int scroll = (preview != m_markdownPreview || sameDocument) ? preview->verticalScrollBar()->value() : 0;
+        // Resolve relative images beside the saved document, never beside a previous tab.
+        preview->document()->setBaseUrl(path.isEmpty() ? QUrl()
+            : QUrl::fromLocalFile(QFileInfo(path).absolutePath() + QDir::separator()));
+        if (!editor) preview->setPlainText(QStringLiteral("打开或新建文档以预览 Markdown。"));
+        else if (loading) preview->setPlainText(QStringLiteral("正在读取文件…"));
+        else if (editor->document()->characterCount() > 2 * 1024 * 1024)
+            preview->setPlainText(QStringLiteral("文档过大，已暂停 Markdown 预览（上限约 200 万字符）。"));
+        else preview->document()->setMarkdown(editor->toPlainText(),
+            QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) | QTextDocument::MarkdownNoHTML);
+        preview->verticalScrollBar()->setValue(scroll);
+    }
 }
 
 void MainWindow::setupMenus()
@@ -432,9 +437,19 @@ void MainWindow::setupMenus()
     m_redoAction = edit->addAction(Theme::icon("redo"), QStringLiteral("重做"), this, [this] { if (current()) current()->redo(); }, QKeySequence::Redo);
     edit->addSeparator();
     edit->addAction(QStringLiteral("剪切"), this, [this] { if (current()) current()->cut(); }, QKeySequence::Cut);
-    edit->addAction(QStringLiteral("复制"), this, [this] { if (current()) current()->copy(); }, QKeySequence::Copy);
+    edit->addAction(QStringLiteral("复制"), this, [this] {
+        if (auto *editor = current()) {
+            if (editor->isMarkdownPreviewVisible()) editor->markdownPreview()->copy();
+            else editor->copy();
+        }
+    }, QKeySequence::Copy);
     edit->addAction(QStringLiteral("粘贴"), this, [this] { if (current()) current()->paste(); }, QKeySequence::Paste);
-    edit->addAction(QStringLiteral("全选"), this, [this] { if (current()) current()->selectAll(); }, QKeySequence::SelectAll);
+    edit->addAction(QStringLiteral("全选"), this, [this] {
+        if (auto *editor = current()) {
+            if (editor->isMarkdownPreviewVisible()) editor->markdownPreview()->selectAll();
+            else editor->selectAll();
+        }
+    }, QKeySequence::SelectAll);
     edit->addSeparator();
     m_completionAction = edit->addAction(QStringLiteral("代码补全"), this, [this] { if (current()) current()->requestCompletion(); });
     m_completionAction->setObjectName("actionCompletion");
@@ -626,6 +641,16 @@ void MainWindow::setupStatus()
     connect(m_zoom, &QToolButton::clicked, this, [this] { if (current()) current()->setFontSize(13); });
     statusBar()->addPermanentWidget(m_position); statusBar()->addPermanentWidget(m_encoding);
     statusBar()->addPermanentWidget(m_ending); statusBar()->addPermanentWidget(m_zoom);
+    m_markdownToggle = button(QStringLiteral("MD · 编辑"), QStringLiteral("切换到 Markdown 渲染视图"), this, true);
+    m_markdownToggle->setObjectName("markdownToggle");
+    m_markdownToggle->setAccessibleName(QStringLiteral("Markdown 编辑 / 预览切换"));
+    m_markdownToggle->setAutoRaise(true);
+    m_markdownToggle->hide();
+    statusBar()->addPermanentWidget(m_markdownToggle);
+    connect(m_markdownToggle, &QToolButton::toggled, this, [this](bool preview) {
+        if (preview) hideSearch();
+        if (auto *editor = current()) editor->setMarkdownPreviewVisible(preview);
+    });
 }
 
 void MainWindow::setupTasks()
@@ -790,6 +815,11 @@ Editor *MainWindow::addEditor(const QString &name)
     editor->displayName = name; editor->setDark(m_dark);
     editor->setBackground(m_background, this);
     editor->setLanguageSettings(m_languages);
+    connect(editor, &Editor::markdownStateChanged, this, [this, editor] {
+        if (editor != current()) return;
+        m_markdownRevision = -2;
+        updateMarkdownPreview(); updateStatus();
+    });
     m_lsp->addEditor(editor);
     connect(editor, &Editor::languageStatusChanged, this, [this, editor](const QString &) {
         if (editor == current()) updateTreeSitterStatus();
@@ -874,7 +904,7 @@ void MainWindow::openPath(const QString &path, const QString &forcedEncoding)
         editor->encoding = result.encoding; editor->ending = result.ending;
         editor->mixedEndings = result.mixedEndings; editor->diskModified = result.modified; editor->diskSize = result.byteSize;
         editor->setPlainText(result.text); editor->document()->setModified(false);
-        editor->setReadOnly(false); editor->setPlaceholderText(QStringLiteral("在这里开始书写…"));
+        editor->setReadOnly(editor->isMarkdownPreviewVisible()); editor->setPlaceholderText(QStringLiteral("在这里开始书写…"));
         editor->setLanguage(QFileInfo(result.path).suffix());
         m_lsp->refreshEditor(editor);
         updateTab(editor);
@@ -1099,15 +1129,25 @@ void MainWindow::refreshDocumentList()
 
 void MainWindow::updateStatus()
 {
-    if (m_markdownDock && m_markdownDock->isVisible() && !m_markdownTimer->isActive()) m_markdownTimer->start();
-    if (!m_position || !m_saveAction) return;
-    updateTreeSitterStatus();
     auto *editor = current();
+    if (m_markdownDock && (m_markdownDock->isVisible() || (editor && editor->isMarkdownPreviewVisible()))
+        && !m_markdownTimer->isActive()) m_markdownTimer->start();
+    if (!m_position || !m_saveAction) return;
+    if (m_markdownToggle) {
+        const QSignalBlocker blocker(m_markdownToggle);
+        const bool preview = editor && editor->isMarkdownPreviewVisible();
+        m_markdownToggle->setVisible(editor && editor->isMarkdown());
+        m_markdownToggle->setEnabled(editor && !editor->loading);
+        m_markdownToggle->setChecked(preview);
+        m_markdownToggle->setText(preview ? QStringLiteral("MD · 预览") : QStringLiteral("MD · 编辑"));
+        m_markdownToggle->setToolTip(preview ? QStringLiteral("切换到 Markdown 源码编辑") : QStringLiteral("切换到 Markdown 渲染视图"));
+    }
+    updateTreeSitterStatus();
     m_lsp->setCurrentEditor(editor);
     updateLspStatus();
     if (m_definitionTarget && m_definitionTarget != editor) m_definitionTarget = nullptr;
-    m_completionAction->setEnabled(editor && !editor->loading && !editor->path.isEmpty());
-    m_definitionAction->setEnabled(editor && !editor->loading && !editor->path.isEmpty());
+    m_completionAction->setEnabled(editor && !editor->loading && !editor->isMarkdownPreviewVisible() && !editor->path.isEmpty());
+    m_definitionAction->setEnabled(editor && !editor->loading && !editor->isMarkdownPreviewVisible() && !editor->path.isEmpty());
     if (!editor) {
         m_saveAction->setEnabled(false); m_undoAction->setEnabled(false); m_redoAction->setEnabled(false);
         m_fileLabel->setText(QStringLiteral("欢迎使用 NyaEdit"));
@@ -1126,8 +1166,8 @@ void MainWindow::updateStatus()
     const QString kind = editor->path.isEmpty() ? QStringLiteral("纯文本") : QFileInfo(editor->path).suffix().toUpper();
     m_fileLabel->setText(editor->loading ? QStringLiteral("正在读取…") : QStringLiteral("%1  ·  %2 行%3").arg(kind.isEmpty() ? QStringLiteral("纯文本") : kind).arg(editor->blockCount()).arg(editor->largeFile ? QStringLiteral("  ·  大文件模式") : QString()));
     m_saveAction->setEnabled(!editor->loading);
-    m_undoAction->setEnabled(!editor->loading && editor->document()->isUndoAvailable());
-    m_redoAction->setEnabled(!editor->loading && editor->document()->isRedoAvailable());
+    m_undoAction->setEnabled(!editor->loading && !editor->isMarkdownPreviewVisible() && editor->document()->isUndoAvailable());
+    m_redoAction->setEnabled(!editor->loading && !editor->isMarkdownPreviewVisible() && editor->document()->isRedoAvailable());
     m_encoding->setEnabled(!editor->loading); m_ending->setEnabled(!editor->loading);
     setWindowTitle(QStringLiteral("%1%2 — NyaEdit").arg(editor->dirty() ? QStringLiteral("● ") : QString(), editor->displayName));
 }
@@ -1382,6 +1422,7 @@ void MainWindow::dropEvent(QDropEvent *event)
 void MainWindow::showSearch(bool replace)
 {
     if (!current()) return;
+    if (current()->isMarkdownPreviewVisible()) m_markdownToggle->setChecked(false);
     m_replaceRow->setVisible(replace);
     m_searchTransition->setExpanded(true, m_animations.interfaceEnabled ? m_animations.duration(180) : 0);
     if (current() && current()->textCursor().hasSelection()) {
@@ -1521,7 +1562,7 @@ void MainWindow::reopenEncoding(const QString &name)
     const QString path = editor->path;
     connect(watcher, &QFutureWatcher<LoadedFile>::finished, this, [this, watcher, guard] {
         const auto result = watcher->result(); watcher->deleteLater(); if (!guard || m_tabs->indexOf(guard) < 0) return;
-        auto *editor = guard.data(); editor->loading = false; editor->setReadOnly(false);
+        auto *editor = guard.data(); editor->loading = false; editor->setReadOnly(editor->isMarkdownPreviewVisible());
         if (!result.ok()) { m_lsp->refreshEditor(editor); updateTab(editor); updateStatus(); QMessageBox::warning(this, QStringLiteral("重新打开失败"), result.error); return; }
         const int position = editor->textCursor().position();
         editor->encoding = result.encoding; editor->ending = result.ending; editor->mixedEndings = result.mixedEndings;
@@ -1554,6 +1595,7 @@ void MainWindow::gotoLine()
     bool ok = false;
     const int line = QInputDialog::getInt(this, QStringLiteral("跳转到行"), QStringLiteral("行号（1–%1）").arg(editor->blockCount()), editor->textCursor().blockNumber() + 1, 1, editor->blockCount(), 1, &ok);
     if (!ok) return;
+    if (editor->isMarkdownPreviewVisible()) m_markdownToggle->setChecked(false);
     auto cursor = editor->textCursor(); cursor.setPosition(editor->document()->findBlockByNumber(line - 1).position());
     editor->setTextCursor(cursor); editor->centerCursor(); editor->setFocus();
 }

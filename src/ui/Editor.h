@@ -9,6 +9,7 @@
 #include <QJsonObject>
 
 class QListWidget;
+class QTextBrowser;
 
 namespace nya {
 class Highlighter;
@@ -31,6 +32,10 @@ public:
     bool dirty() const;
     QString contents() const;
     void setLanguage(const QString &suffix);
+    bool isMarkdown() const { return m_markdown; }
+    void setMarkdownPreviewVisible(bool visible);
+    bool isMarkdownPreviewVisible() const;
+    QTextBrowser *markdownPreview() const { return m_markdownPreview; }
     void setLanguageSettings(const LanguageSettings &settings);
     LanguageSettings languageSettings() const;
     TreeSitterStatus treeSitterStatus() const;
@@ -56,6 +61,7 @@ public:
     void hideCompletions();
     int lspOffset(const QJsonObject &position) const;
 signals:
+    void markdownStateChanged();
     void languageStatusChanged(const QString &status);
     void zoomChanged();
     void editorFontChanged();
@@ -89,6 +95,8 @@ private:
     void indentSelection(bool outdent);
     Gutter *m_gutter;
     Highlighter *m_highlighter;
+    bool m_markdown = false;
+    QTextBrowser *m_markdownPreview = nullptr;
     QPointer<EditorBackground> m_background;
     QPointer<QWidget> m_backgroundSurface;
     QVector<SearchMatch> m_matches;

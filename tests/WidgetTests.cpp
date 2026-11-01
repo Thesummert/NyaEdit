@@ -348,6 +348,88 @@ private slots:
         window.close();
     }
 
+    void markdownToggleSwitchesViewsWithoutChangingSource()
+    {
+        QTemporaryDir files; QVERIFY(files.isValid());
+        const QString source = QStringLiteral("# 标题\n\n**粗体** 和正文\n");
+        QFile file(files.filePath("sample.MD")); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(source.toUtf8()); file.close();
+        MainWindow window(nullptr, testPaths()); window.show();
+        auto *toggle = window.findChild<QToolButton *>("markdownToggle"); QVERIFY(toggle);
+        QVERIFY(!toggle->isVisible());
+        window.newDocument(); QVERIFY(!toggle->isVisible());
+        auto *tabs = window.findChild<QTabWidget *>();
+        auto *plain = qobject_cast<Editor *>(tabs->currentWidget());
+        plain->setPlainText(QStringLiteral("普通文本")); plain->document()->setModified(false);
+        window.openPath(file.fileName());
+        QTRY_VERIFY(tabs->count() == 2 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget());
+        QVERIFY(toggle->isVisible()); QVERIFY(toggle->isEnabled()); QVERIFY(!toggle->isChecked());
+        QVERIFY(!editor->dirty());
+        auto cursor = editor->textCursor(); cursor.movePosition(QTextCursor::End);
+        editor->setTextCursor(cursor); editor->insertPlainText(QStringLiteral("新增"));
+        const auto edited = editor->contents();
+        const int position = editor->textCursor().position();
+        QVERIFY(editor->document()->isUndoAvailable());
+        QTest::mouseClick(toggle, Qt::LeftButton);
+        auto *preview = editor->findChild<QTextBrowser *>("inlineMarkdownPreview"); QVERIFY(preview);
+        QVERIFY(toggle->isChecked()); QVERIFY(preview->isVisible()); QVERIFY(editor->isReadOnly());
+        QCOMPARE(preview->document()->firstBlock().blockFormat().headingLevel(), 1);
+        QVERIFY(!preview->toPlainText().contains("**"));
+        QVERIFY(preview->toPlainText().contains(QStringLiteral("新增")));
+        QCOMPARE(editor->contents(), edited); QCOMPARE(editor->textCursor().position(), position);
+        QVERIFY(editor->dirty()); QVERIFY(editor->document()->isUndoAvailable());
+        QTRY_VERIFY(preview->hasFocus());
+        QTest::keyClicks(preview, "cannot edit"); QCOMPARE(editor->contents(), edited);
+        window.resize(1000, 700);
+        QTRY_COMPARE(preview->geometry(), editor->rect());
+        tabs->setCurrentWidget(plain); QVERIFY(!toggle->isVisible());
+        tabs->setCurrentWidget(editor); QVERIFY(toggle->isVisible()); QVERIFY(toggle->isChecked());
+        QVERIFY(preview->isVisible());
+        window.findChild<QAction *>("actionWelcome")->trigger(); QVERIFY(!toggle->isVisible());
+        window.openPath(file.fileName()); QVERIFY(toggle->isVisible()); QVERIFY(toggle->isChecked());
+        QTest::mouseClick(toggle, Qt::LeftButton);
+        QVERIFY(!preview->isVisible()); QVERIFY(!editor->isReadOnly());
+        QCOMPARE(editor->textCursor().position(), position);
+        editor->undo(); QCOMPARE(editor->contents(), source); QVERIFY(!editor->dirty());
+        editor->redo(); QCOMPARE(editor->contents(), edited);
+        QTest::mouseClick(toggle, Qt::LeftButton);
+        window.findChild<QAction *>("actionSave")->trigger();
+        QCOMPARE(loadFile(file.fileName()).text, edited); QVERIFY(!editor->dirty());
+        window.findChild<QAction *>("actionFind")->trigger();
+        QVERIFY(!toggle->isChecked()); QVERIFY(!preview->isVisible()); QVERIFY(!editor->isReadOnly());
+        editor->document()->setModified(false); window.close();
+    }
+
+    void markdownToggleFollowsLanguageChangesAndRendersRelativeImages()
+    {
+        QTemporaryDir files; QVERIFY(files.isValid());
+        QImage image(12, 9, QImage::Format_RGB32); image.fill(Qt::red);
+        QVERIFY(image.save(files.filePath("image.png")));
+        QFile file(files.filePath("sample.markdown")); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("# Saved\n\n![example](image.png)\n"); file.close();
+        MainWindow window(nullptr, testPaths()); window.show(); window.openPath(file.fileName());
+        auto *tabs = window.findChild<QTabWidget *>();
+        QTRY_VERIFY(tabs->count() == 1 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget());
+        auto *toggle = window.findChild<QToolButton *>("markdownToggle");
+        QVERIFY(toggle->isVisible()); toggle->click();
+        auto *preview = editor->markdownPreview(); QVERIFY(preview);
+        QCOMPARE(preview->document()->baseUrl(), QUrl::fromLocalFile(files.path() + QDir::separator()));
+        const auto resource = preview->document()->resource(QTextDocument::ImageResource, QUrl("image.png"));
+        QVERIFY(!qvariant_cast<QImage>(resource).isNull() || !qvariant_cast<QPixmap>(resource).isNull());
+        QVERIFY(!editor->dirty());
+        window.findChild<QAction *>("actionMarkdownPreview")->trigger();
+        auto *dockPreview = window.findChild<QTextBrowser *>("markdownPreview");
+        QCOMPARE(dockPreview->toPlainText(), preview->toPlainText());
+        editor->setLanguage("txt");
+        QVERIFY(!editor->isMarkdownPreviewVisible()); QVERIFY(!editor->isReadOnly());
+        QVERIFY(!toggle->isVisible()); QVERIFY(!toggle->isChecked());
+        editor->setLanguage("markdown");
+        QVERIFY(toggle->isVisible()); QVERIFY(!toggle->isChecked());
+        window.close();
+    }
+
     void markdownPreviewRendersAndFollowsCurrentDocument()
     {
         MainWindow window(nullptr, testPaths()); window.show();

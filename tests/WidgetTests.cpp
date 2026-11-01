@@ -44,6 +44,8 @@
 #include <QTimer>
 #include <QTextBlock>
 #include <QTextLayout>
+#include <QTextBrowser>
+#include <QTextTable>
 #include <QToolButton>
 #include <QToolBar>
 #include <QTreeView>
@@ -116,6 +118,73 @@ class WidgetTests : public QObject {
         return result;
     }
 private slots:
+    void markdownPreviewRendersAndFollowsCurrentDocument()
+    {
+        MainWindow window(nullptr, testPaths()); window.show();
+        auto *action = window.findChild<QAction *>("actionMarkdownPreview"); QVERIFY(action);
+        auto *preview = window.findChild<QTextBrowser *>("markdownPreview"); QVERIFY(preview);
+        auto *dock = window.findChild<QDockWidget *>("markdownDock"); QVERIFY(dock);
+        QVERIFY(!dock->isVisible());
+        action->trigger(); QVERIFY(dock->isVisible()); QVERIFY(preview->isReadOnly());
+        QVERIFY(preview->toPlainText().contains(QStringLiteral("打开或新建")));
+        window.newDocument();
+        auto *tabs = window.findChild<QTabWidget *>(); QVERIFY(tabs);
+        auto *first = qobject_cast<Editor *>(tabs->currentWidget()); QVERIFY(first);
+        const QString source = QStringLiteral("# 标题\n\n**粗体** 和 *斜体*\n\n- 列表项\n\n> 引用\n\n```cpp\nint n = 1;\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n");
+        first->setPlainText(source);
+        QTRY_VERIFY(preview->toPlainText().contains(QStringLiteral("标题")));
+        QCOMPARE(preview->document()->firstBlock().blockFormat().headingLevel(), 1);
+        QVERIFY(!preview->toPlainText().contains("**"));
+        bool bold = false, table = false;
+        for (auto block = preview->document()->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it)
+                if (it.fragment().text() == QStringLiteral("粗体")) bold = it.fragment().charFormat().fontWeight() >= QFont::Bold;
+        for (auto *frame : preview->document()->rootFrame()->childFrames())
+            if (qobject_cast<QTextTable *>(frame)) table = true;
+        QVERIFY(bold); QVERIFY(table); QCOMPARE(first->toPlainText(), source);
+        first->insertPlainText(QStringLiteral("更新"));
+        QTRY_VERIFY(preview->toPlainText().contains(QStringLiteral("更新")));
+        window.newDocument();
+        auto *second = qobject_cast<Editor *>(tabs->currentWidget()); QVERIFY(second);
+        second->setPlainText(QStringLiteral("# 第二份"));
+        QTRY_COMPARE(preview->toPlainText().trimmed(), QStringLiteral("第二份"));
+        tabs->setCurrentWidget(first);
+        QTRY_VERIFY(preview->toPlainText().contains(QStringLiteral("标题")));
+        window.findChild<QAction *>("actionTheme")->trigger();
+        QCOMPARE(preview->palette().color(QPalette::Text), qApp->palette().color(QPalette::Text));
+        action->trigger(); QVERIFY(!dock->isVisible());
+        first->setPlainText(QStringLiteral("# 隐藏后修改"));
+        action->trigger(); QCOMPARE(preview->toPlainText().trimmed(), QStringLiteral("隐藏后修改"));
+        first->document()->setModified(false); second->document()->setModified(false);
+        window.close();
+    }
+
+    void markdownPreviewUsesFileDirectoryAndClearsOnWelcome()
+    {
+        QTemporaryDir files; QVERIFY(files.isValid());
+        QImage image(12, 9, QImage::Format_RGB32); image.fill(Qt::red);
+        QVERIFY(image.save(files.filePath("image.png")));
+        QFile file(files.filePath("sample.md")); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("# Saved\n\n![example](image.png)\n"); file.close();
+        MainWindow window(nullptr, testPaths()); window.show(); window.openPath(file.fileName());
+        auto *tabs = window.findChild<QTabWidget *>();
+        QTRY_VERIFY(tabs->count() == 1 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        window.findChild<QAction *>("actionMarkdownPreview")->trigger();
+        auto *preview = window.findChild<QTextBrowser *>("markdownPreview");
+        QCOMPARE(preview->document()->baseUrl(), QUrl::fromLocalFile(files.path() + QDir::separator()));
+        const auto resource = preview->document()->resource(QTextDocument::ImageResource, QUrl("image.png"));
+        QVERIFY(!qvariant_cast<QImage>(resource).isNull() || !qvariant_cast<QPixmap>(resource).isNull());
+        window.findChild<QAction *>("actionWelcome")->trigger();
+        QTRY_VERIFY(preview->toPlainText().contains(QStringLiteral("打开或新建")));
+        QVERIFY(preview->document()->baseUrl().isEmpty());
+        tabs->setCurrentIndex(0);
+        window.newDocument();
+        auto *editor = qobject_cast<Editor *>(tabs->currentWidget());
+        editor->setPlainText(QString(2 * 1024 * 1024 + 1, QLatin1Char('x')));
+        QTRY_VERIFY(preview->toPlainText().contains(QStringLiteral("文档过大")));
+        editor->document()->setModified(false); window.close();
+    }
+
     void runMenuOpensTerminalInProjectOrFileDirectory()
     {
         QTemporaryDir project, files;

@@ -24,6 +24,7 @@ class QMenu;
 class QSplitter;
 class QStackedWidget;
 class QTabWidget;
+class QTextBrowser;
 class QTimer;
 class QToolButton;
 class QTreeView;
@@ -58,6 +59,8 @@ private:
     void setupWorkspace();
     void setupSearch();
     void setupStatus();
+    void setupMarkdownPreview();
+    void updateMarkdownPreview();
     void setupTasks();
     void chooseTask();
     void runTask(const QString &label);
@@ -117,6 +120,13 @@ private:
     void showFileContextMenu(const QString &path, const QPoint &globalPosition);
 
     QTabWidget *m_tabs = nullptr;
+    QDockWidget *m_markdownDock = nullptr;
+    QTextBrowser *m_markdownPreview = nullptr;
+    QTimer *m_markdownTimer = nullptr;
+    QPointer<Editor> m_markdownEditor;
+    QString m_markdownPath;
+    int m_markdownRevision = -2;
+    bool m_markdownLoading = false;
     QStackedWidget *m_pages = nullptr;
     WelcomePage *m_welcome = nullptr;
     AppStorage *m_storage = nullptr;

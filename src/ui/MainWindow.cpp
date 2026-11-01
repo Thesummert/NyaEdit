@@ -52,6 +52,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextBrowser>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -115,7 +116,7 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     Theme::apply(*qApp, m_dark);
     m_searchTimer = new QTimer(this); m_searchTimer->setSingleShot(true); m_searchTimer->setInterval(180);
     connect(m_searchTimer, &QTimer::timeout, this, &MainWindow::refreshSearch);
-    setupWorkspace(); setupTasks(); setupMenus(); setupToolbar(); setupStatus();
+    setupWorkspace(); setupMarkdownPreview(); setupTasks(); setupMenus(); setupToolbar(); setupStatus();
     connect(m_background, &EditorBackground::changed, this, &MainWindow::updateBackgroundSurface);
     connect(m_background, &EditorBackground::fileUnavailable, this, [this] {
         m_storage->setValue("background/path", QString());
@@ -332,6 +333,60 @@ void MainWindow::setupWorkspace()
     m_searchTransition = new PanelTransition(m_searchPanel, Qt::Vertical);
 }
 
+void MainWindow::setupMarkdownPreview()
+{
+    m_markdownDock = new QDockWidget(QStringLiteral("Markdown 预览"), this);
+    m_markdownDock->setObjectName("markdownDock");
+    m_markdownDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_markdownPreview = new QTextBrowser(m_markdownDock);
+    m_markdownPreview->setObjectName("markdownPreview");
+    m_markdownPreview->setMinimumWidth(220);
+    m_markdownPreview->setFrameShape(QFrame::NoFrame);
+    m_markdownPreview->document()->setDocumentMargin(20);
+    m_markdownPreview->setOpenLinks(false);
+    connect(m_markdownPreview, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
+        if (url.isRelative() && url.path().isEmpty() && url.hasFragment())
+            m_markdownPreview->scrollToAnchor(url.fragment());
+        else if (url.scheme() == "http" || url.scheme() == "https" || url.scheme() == "mailto")
+            QDesktopServices::openUrl(url);
+    });
+    m_markdownDock->setWidget(m_markdownPreview);
+    addDockWidget(Qt::RightDockWidgetArea, m_markdownDock);
+    m_markdownDock->hide();
+    m_markdownTimer = new QTimer(this);
+    m_markdownTimer->setSingleShot(true); m_markdownTimer->setInterval(180);
+    connect(m_markdownTimer, &QTimer::timeout, this, &MainWindow::updateMarkdownPreview);
+    connect(m_markdownDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        if (visible) { m_markdownRevision = -2; updateMarkdownPreview(); }
+        else m_markdownTimer->stop();
+    });
+}
+
+void MainWindow::updateMarkdownPreview()
+{
+    if (!m_markdownDock->isVisible()) return;
+    auto *editor = current();
+    const int revision = editor ? editor->document()->revision() : -1;
+    const QString path = editor ? editor->path : QString();
+    const bool loading = editor && editor->loading;
+    if (m_markdownEditor == editor && m_markdownRevision == revision
+        && m_markdownPath == path && m_markdownLoading == loading) return;
+    const bool sameDocument = m_markdownEditor == editor && m_markdownPath == path;
+    const int scroll = sameDocument ? m_markdownPreview->verticalScrollBar()->value() : 0;
+    m_markdownEditor = editor; m_markdownRevision = revision;
+    m_markdownPath = path; m_markdownLoading = loading;
+    // Resolve relative images beside the saved document, never beside a previous tab.
+    m_markdownPreview->document()->setBaseUrl(path.isEmpty() ? QUrl()
+        : QUrl::fromLocalFile(QFileInfo(path).absolutePath() + QDir::separator()));
+    if (!editor) m_markdownPreview->setPlainText(QStringLiteral("打开或新建文档以预览 Markdown。"));
+    else if (loading) m_markdownPreview->setPlainText(QStringLiteral("正在读取文件…"));
+    else if (editor->document()->characterCount() > 2 * 1024 * 1024)
+        m_markdownPreview->setPlainText(QStringLiteral("文档过大，已暂停 Markdown 预览（上限约 200 万字符）。"));
+    else m_markdownPreview->document()->setMarkdown(editor->toPlainText(),
+        QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) | QTextDocument::MarkdownNoHTML);
+    m_markdownPreview->verticalScrollBar()->setValue(scroll);
+}
+
 void MainWindow::setupMenus()
 {
     auto *file = menuBar()->addMenu(QStringLiteral("文件(&F)"));
@@ -404,6 +459,10 @@ void MainWindow::setupMenus()
         updateStatus();
     });
     welcomeAction->setObjectName("actionWelcome");
+    auto *markdownAction = m_markdownDock->toggleViewAction();
+    markdownAction->setObjectName("actionMarkdownPreview");
+    markdownAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+M")));
+    view->addAction(markdownAction);
     auto *themeAction = view->addAction(QStringLiteral("切换深色 / 浅色主题"), this, [this] { setDark(!m_dark); });
     themeAction->setObjectName("actionTheme");
     view->addSeparator();
@@ -1045,6 +1104,7 @@ void MainWindow::refreshDocumentList()
 
 void MainWindow::updateStatus()
 {
+    if (m_markdownDock && m_markdownDock->isVisible() && !m_markdownTimer->isActive()) m_markdownTimer->start();
     if (!m_position || !m_saveAction) return;
     updateTreeSitterStatus();
     auto *editor = current();

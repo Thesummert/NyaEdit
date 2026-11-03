@@ -18,6 +18,8 @@ struct StoragePaths {
     QString editorConfigFile() const;
     QString systemConfigFile() const;
     QString historyFile() const;
+    QString treeSitterConfigFile() const;
+    QString treeSitterParserDirectory() const;
 };
 
 enum class RecentKind { File, Folder };

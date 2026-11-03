@@ -1,4 +1,5 @@
 #include "AppStorage.h"
+#include "TreeSitterManager.h"
 
 #include <QDir>
 #include <QFile>
@@ -41,6 +42,8 @@ StoragePaths StoragePaths::underDirectory(const QString &root)
 QString StoragePaths::editorConfigFile() const { return QDir(configDirectory).filePath("editor.ini"); }
 QString StoragePaths::systemConfigFile() const { return QDir(configDirectory).filePath("system.ini"); }
 QString StoragePaths::historyFile() const { return QDir(dataDirectory).filePath("history.json"); }
+QString StoragePaths::treeSitterConfigFile() const { return QDir(configDirectory).absoluteFilePath("tree-sitter/config.json"); }
+QString StoragePaths::treeSitterParserDirectory() const { return QDir(dataDirectory).absoluteFilePath("tree-sitter/parsers"); }
 
 AppStorage::AppStorage(StoragePaths paths, QObject *parent) : QObject(parent), m_paths(std::move(paths))
 {
@@ -79,11 +82,15 @@ bool AppStorage::initialize(bool importLegacySettings)
         {"animation/interface", true}, {"animation/cursor", true}, {"animation/selection", true}, {"animation/speed", 1.0},
         {"editor/fontFamily", QString()}, {"editor/fontSize", 13}, {"editor/wrap", false}, {"search/fuzzy", true},
         {"language/treeSitterEnabled", false}, {"language/treeSitterExecutable", QStringLiteral("tree-sitter")},
-        {"language/treeSitterConfigPath", QString()}, {"language/lspEnabled", false},
+        {"language/treeSitterConfigPath", m_paths.treeSitterConfigFile()},
+        {"language/treeSitterParserDirectory", m_paths.treeSitterParserDirectory()}, {"language/lspEnabled", false},
         {"language/lspExecutable", QStringLiteral("clangd")}, {"language/lspArguments", QString()},
         {"language/lspExtensions", QStringLiteral("c,cpp,cc,cxx,h,hpp,hxx")}};
     for (auto it = defaults.cbegin(); it != defaults.cend(); ++it)
         if (!m_editor->contains(it.key())) m_editor->setValue(it.key(), it.value());
+    // Empty paths from older versions now use the editor's independent configuration.
+    for (const auto &key : {QStringLiteral("language/treeSitterConfigPath"), QStringLiteral("language/treeSitterParserDirectory")})
+        if (m_editor->value(key).toString().trimmed().isEmpty()) m_editor->setValue(key, defaults.value(key));
     if (!m_system->contains("meta/schemaVersion")) m_system->setValue("meta/schemaVersion", 1);
     QSettings legacy;
     if (importLegacySettings && newEditor) {
@@ -91,6 +98,13 @@ bool AppStorage::initialize(bool importLegacySettings)
         for (const auto &key : keys) if (legacy.contains(key)) m_editor->setValue(key, legacy.value(key));
     }
     bool ok = syncSettings(*m_editor);
+    if (m_editor->value("language/treeSitterConfigPath").toString() == m_paths.treeSitterConfigFile()) {
+        QString error;
+        if (!TreeSitterManager::saveConfiguration(m_paths.treeSitterConfigFile(),
+                m_editor->value("language/treeSitterParserDirectory").toString(), &error)) {
+            fail(error); ok = false;
+        }
+    }
     if (!syncSettings(*m_system)) ok = false;
     if (!newHistory) {
         m_historyReadable = loadHistory();

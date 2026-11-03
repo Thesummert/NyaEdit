@@ -18,6 +18,7 @@ struct LanguageSettings {
     QString configPath;
     bool lspEnabled = false;
     QVector<LspServerSettings> lspServers = {LspServerSettings{}};
+    QString parserDirectory = {};
 };
 struct SyntaxSpan {
     int start = 0;

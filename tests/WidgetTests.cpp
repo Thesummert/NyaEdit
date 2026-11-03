@@ -947,6 +947,8 @@ private slots:
     }
     void languageSettingsApplyCancelAndPersist()
     {
+        const auto configPath = QDir(testPaths().configDirectory).filePath("custom config.json");
+        const auto parserDirectory = QDir(testPaths().dataDirectory).filePath(QStringLiteral("语言 parsers"));
         QString executable = QCoreApplication::applicationDirPath() + "/nya_tree_sitter_tests";
 #ifdef Q_OS_WIN
         executable += ".exe";
@@ -970,7 +972,8 @@ private slots:
                 if (!dialog) return;
                 dialog->findChild<QCheckBox *>("treeSitterEnabled")->setChecked(true);
                 dialog->findChild<QLineEdit *>("treeSitterExecutable")->setText(executable);
-                dialog->findChild<QLineEdit *>("treeSitterConfigPath")->setText("custom config.json");
+                dialog->findChild<QLineEdit *>("treeSitterConfigPath")->setText(configPath);
+                dialog->findChild<QLineEdit *>("treeSitterParserDirectory")->setText(parserDirectory);
                 dialog->accept(); handled = true;
             });
             action->trigger(); QVERIFY(handled);
@@ -978,13 +981,39 @@ private slots:
                 auto *editor = qobject_cast<Editor *>(tabs->widget(i));
                 QVERIFY(editor->languageSettings().treeSitterEnabled); QVERIFY(!editor->dirty());
                 QCOMPARE(editor->languageSettings().executable, executable);
+                QCOMPARE(editor->languageSettings().parserDirectory, parserDirectory);
             }
             window.newDocument(); QVERIFY(qobject_cast<Editor *>(tabs->currentWidget())->languageSettings().treeSitterEnabled);
         }
         MainWindow reloaded(nullptr, testPaths()); reloaded.newDocument();
         auto *editor = qobject_cast<Editor *>(reloaded.findChild<QTabWidget *>()->currentWidget());
         QVERIFY(editor->languageSettings().treeSitterEnabled); QCOMPARE(editor->languageSettings().executable, executable);
-        QCOMPARE(editor->languageSettings().configPath, QString("custom config.json"));
+        QCOMPARE(editor->languageSettings().configPath, configPath);
+        QCOMPARE(editor->languageSettings().parserDirectory, parserDirectory);
+        QFile config(configPath); QVERIFY(config.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(config.readAll()).object().value("parser-directories").toArray(), QJsonArray{parserDirectory});
+    }
+    void treeSitterSettingsMenuAndInvalidConfig()
+    {
+        MainWindow window(nullptr, testPaths());
+        auto *action = window.findChild<QAction *>("actionTreeSitterSettings"); QVERIFY(action);
+        bool handled = false;
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<LanguageSettingsDialog *>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            auto *tabs = dialog->findChild<QTabWidget *>("languageSettingsTabs");
+            QCOMPARE(tabs->currentIndex(), 0);
+            QCOMPARE(dialog->findChild<QLineEdit *>("treeSitterConfigPath")->text(), testPaths().treeSitterConfigFile());
+            QCOMPARE(dialog->findChild<QLineEdit *>("treeSitterParserDirectory")->text(), testPaths().treeSitterParserDirectory());
+            QCOMPARE(dialog->findChild<QListWidget *>("treeSitterParsers")->count(), 8);
+            dialog->findChild<QLineEdit *>("treeSitterConfigPath")->setText("relative.json");
+            dialog->accept(); QVERIFY(dialog->isVisible());
+            QVERIFY(dialog->findChild<QLabel *>("treeSitterDownloadStatus")->text().contains(QStringLiteral("绝对路径")));
+            dialog->reject(); handled = true;
+        });
+        action->trigger(); QVERIFY(handled);
+        AppStorage reloaded(testPaths()); QVERIFY(reloaded.initialize());
+        QCOMPARE(reloaded.value("language/treeSitterConfigPath").toString(), testPaths().treeSitterConfigFile());
     }
     void treeSitterHighlightRefreshFallbackAndLargeFile()
     {

@@ -98,6 +98,7 @@ MainWindow::MainWindow(QWidget *parent, StoragePaths storagePaths) : QMainWindow
     m_languages.treeSitterEnabled = m_storage->value("language/treeSitterEnabled", false).toBool();
     m_languages.executable = m_storage->value("language/treeSitterExecutable", "tree-sitter").toString();
     m_languages.configPath = m_storage->value("language/treeSitterConfigPath").toString();
+    m_languages.parserDirectory = m_storage->value("language/treeSitterParserDirectory").toString();
     m_languages.lspEnabled = m_storage->value("language/lspEnabled", false).toBool();
     const auto storedServers = m_storage->value("language/lspServers");
     if (storedServers.isValid()) {
@@ -530,6 +531,8 @@ void MainWindow::setupMenus()
     animationSettings->setObjectName("actionAnimationSettings");
     auto *languageSettings = settings->addAction(QStringLiteral("语言支持…"), this, &MainWindow::chooseLanguageSettings);
     languageSettings->setObjectName("actionLanguageSettings");
+    auto *treeSitterSettings = settings->addAction(QStringLiteral("Tree-sitter 配置…"), this, &MainWindow::chooseLanguageSettings);
+    treeSitterSettings->setObjectName("actionTreeSitterSettings");
     settings->addSeparator();
     auto *configDirectory = settings->addAction(QStringLiteral("打开配置目录"), this, [this] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(m_storage->paths().configDirectory));
@@ -1307,12 +1310,13 @@ void MainWindow::chooseEditorFont()
 
 void MainWindow::chooseLanguageSettings()
 {
-    LanguageSettingsDialog dialog(m_languages, this);
+    LanguageSettingsDialog dialog(m_languages, this, m_storage->paths());
     if (dialog.exec() != QDialog::Accepted) return;
     m_languages = dialog.settings();
     m_storage->setValue("language/treeSitterEnabled", m_languages.treeSitterEnabled);
     m_storage->setValue("language/treeSitterExecutable", m_languages.executable);
     m_storage->setValue("language/treeSitterConfigPath", m_languages.configPath);
+    m_storage->setValue("language/treeSitterParserDirectory", m_languages.parserDirectory);
     m_storage->setValue("language/lspEnabled", m_languages.lspEnabled);
     QVariantList servers;
     for (const auto &server : m_languages.lspServers)

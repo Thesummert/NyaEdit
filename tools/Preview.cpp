@@ -2,6 +2,7 @@
 #include "Editor.h"
 #include "FontSettingsDialog.h"
 #include "AnimationSettingsDialog.h"
+#include "LanguageSettingsDialog.h"
 #include "MainWindow.h"
 #include "Theme.h"
 #include <QAction>
@@ -194,7 +195,12 @@ int main() {
                                     if (!renderTabContextMenu(window, output + "/context-menu-light.png")) { app.exit(3); return; }
                                     window.findChild<QAction *>("actionTheme")->trigger();
                                     if (!renderTabContextMenu(window, output + "/context-menu-dark.png")) { app.exit(3); return; }
-                                    app.quit();
+                                    auto *languageDialog = new nya::LanguageSettingsDialog({}, &window, paths);
+                                    languageDialog->show();
+                                    QTimer::singleShot(200, &app, [&, languageDialog] {
+                                        languageDialog->grab().save(output + "/tree-sitter-settings.png");
+                                        languageDialog->reject(); app.quit();
+                                    });
                                 });
                             });
                         });

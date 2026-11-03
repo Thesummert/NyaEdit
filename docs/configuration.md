@@ -1,12 +1,13 @@
 # 配置与历史存储
 
-`nya_core` 中的 `AppStorage` 统一管理持久化数据，不依赖 Widgets。正常启动时创建三个文件；自动测试、界面预览和 `--smoke-test` 使用临时目录，不修改用户设置。
+`nya_qt` 中的 `AppStorage` 统一管理持久化数据，不依赖 Widgets。正常启动时创建以下文件；自动测试、界面预览和 `--smoke-test` 使用临时目录，不修改用户设置。
 
 | 文件 | 内容 | 位置接口 |
 | --- | --- | --- |
 | `editor.ini` | 主题、背景、侧栏、字体及字号、动画、语言支持、自动换行、文件搜索模式、窗口位置及分栏尺寸 | `QStandardPaths::AppConfigLocation` |
 | `system.ini` | 预留应用系统选项，目前只有格式版本 | `QStandardPaths::AppConfigLocation` |
 | `history.json` | 最近文件与文件夹、打开时间、文件选择器上次目录 | `QStandardPaths::AppLocalDataLocation` |
+| `tree-sitter/config.json` | 编辑器独立的 Tree-sitter 配置，含 `parser-directories` | `QStandardPaths::AppConfigLocation` |
 
 系统配置指当前用户的应用系统选项，后续可扩展更新、平台集成等配置。文件和读写接口已就绪，目前未添加对应设置页面。
 
@@ -51,7 +52,8 @@ fuzzy=true
 [language]
 treeSitterEnabled=false
 treeSitterExecutable=tree-sitter
-treeSitterConfigPath=
+treeSitterConfigPath=<配置目录>/tree-sitter/config.json
+treeSitterParserDirectory=<历史数据目录>/tree-sitter/parsers
 lspEnabled=false
 lspExecutable=clangd
 lspArguments=
@@ -75,7 +77,15 @@ blur=0
 
 运行时监测原图片，并定期和在应用恢复激活时检查文件；原图片被移动、删除、损坏或无法读取时取消背景、释放图片缓存、恢复所有窗口区域的主题底色，并清空持久化的 `background/path`。启动时也执行校验，因此丢失的背景不会在重启后残留；保留不透明度和模糊偏好以便下次选图。图片重新出现后需要主动选择，不会自行恢复。图片解码与模糊结果在窗口内共享，输入与滚动时只绘制缓存。
 
-`language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。`language/treeSitterConfigPath` 可指定 Tree-sitter 的 `config.json`，留空使用 CLI 默认配置；建议填写绝对路径。在“设置 → 语言支持…”中确认后应用到所有已打开文档，并供新文档和重启后使用；取消不会修改设置，清除历史不会重置语言支持。语言解析器及其高亮规则由用户现有的 Tree-sitter 配置提供，NyaEdit 不自动安装。
+`language/treeSitterEnabled` 控制可选的 Tree-sitter 语法着色，默认关闭；`language/treeSitterExecutable` 为 CLI 名称或可执行文件完整路径，默认 `tree-sitter`，通过 PATH 查找，macOS 还会检查常见的 Homebrew / MacPorts 路径。
+
+“设置 → Tree-sitter 配置…”和“设置 → 语言支持…”的 Tree-sitter 页可配置程序、配置文件和解析器存放目录，并下载 C、C++、JSON、Python、Rust、Go、JavaScript / JSX、TypeScript / TSX 解析器。下载通过 Git 从 `github.com/tree-sitter` 对应仓库获取生成的解析器源码和高亮查询；C++ 的 C 查询依赖及 TypeScript 的 JavaScript 查询依赖一并下载。需要自行安装 Git、Tree-sitter CLI 及 CLI 编译解析器使用的 C/C++ 编译器。
+
+`language/treeSitterConfigPath` 默认指向编辑器配置目录下的 `tree-sitter/config.json`；`language/treeSitterParserDirectory` 默认指向历史数据目录下的 `tree-sitter/parsers`。上方 INI 中的 `<配置目录>` 和 `<历史数据目录>` 仅作说明，实际保存绝对路径。可通过“使用编辑器独立配置”恢复这两个路径，也可指定自己的绝对路径。旧版空配置路径自动迁移到编辑器独立配置，旧版显式指定的配置路径保留，启动时不修改外部配置。
+
+每个解析器存放为 `<解析器存放目录>/tree-sitter-<语言>`。确认设置时原子保存配置，把存放目录加入 `parser-directories`，保留其他目录、主题及扩展键，并避免重复添加；无效 JSON 会提示错误并保留原文件。目录选择与配置选项保存到 `editor.ini`，立即应用于所有已打开文档及后续新文档，重启后沿用。编辑器调用 CLI 时显式传递该配置文件，不依赖 CLI 的系统默认配置。目录结构遵循 [Tree-sitter parser-directories 规则](https://tree-sitter.github.io/tree-sitter/cli/init-config.html)。
+
+下载在后台执行，支持取消，每个仓库限时 120 秒；临时文件在失败、取消和关闭设置页时清理，校验成功后才安装到目标位置，已有同名目录不会被覆盖。界面区分已下载和未下载，下载成功后点击确定才保存路径及配置；取消设置保留已下载文件。更换存放目录不会移动已有解析器，原有 `parser-directories` 项也会保留。CLI 自行管理编译后的解析器缓存。清除历史不会重置语言支持或删除解析器。
 
 `language/lspEnabled` 开启 LSP 补全与定义跳转，默认关闭，独立于 Tree-sitter。确认“设置 → 语言支持…”后，`language/lspServers` 以 QSettings 的列表格式保存所有服务器，每项包含 `name`（名称）、`executable`（程序）、`arguments`（启动参数）、`extensions`（适用后缀）和 `enabled`（单独启用，默认 `true`）。可通过界面的“添加服务器”“删除服务器”管理列表；删除全部服务器会保存空列表，重启后不会恢复旧项。
 

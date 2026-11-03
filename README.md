@@ -212,7 +212,9 @@ macOS 的应用包使用内置 ICNS；底层 Mach-O 文件在 Finder 中的单�
 
 “设置 → 动画设置…”可分别开关窗口界面动画、光标动画和选择区域动画，并设置 **0.25–3 ×** 速度，数值越大动画越快。默认全部开启、速度 1 ×；确认后应用于所有文档，新文档与重启后沿用设置。光标移动与选区渐变只影响显示，输入、复制和搜索立即生效；关闭选区动画后仍保留高对比选区颜色。
 
-“设置 → 语言支持…”可开启 **Tree-sitter 语法着色**（默认关闭），使用系统的 `tree-sitter` CLI，也可指定可执行文件完整路径和配置文件。需要先安装 CLI，并按 [Tree-sitter 配置说明](https://tree-sitter.github.io/tree-sitter/cli/init-config.html) 设置 `parser-directories`，确保对应语言解析器包含高亮查询；仅安装 CLI 并不自带所有语言。使用 [官方 highlight 命令](https://tree-sitter.github.io/tree-sitter/cli/highlight.html) 验证 `tree-sitter highlight 文件路径` 能正常着色后即可在编辑器启用。确认后立即应用于所有文档，并保存到下次启动；取消不修改设置。
+“设置 → Tree-sitter 配置…”可开启 **Tree-sitter 语法着色**（默认关闭），配置 CLI、独立配置文件和解析器存放目录，下载 C、C++、JSON、Python、Rust、Go、JavaScript / JSX、TypeScript / TSX 解析器。下载来源为 `github.com/tree-sitter` 对应仓库，支持取消和失败清理，自动补齐 C++ / TypeScript 的查询依赖；已有目录不会被覆盖。需先安装 Git、`tree-sitter` CLI 和 C/C++ 编译器。
+
+默认使用编辑器配置目录下的 `tree-sitter/config.json`，解析器位于应用数据目录下的 `tree-sitter/parsers`；也可指定其他绝对路径。确认时自动将存放目录加入配置的 `parser-directories`，保留其他目录及主题，立即应用于所有文档并持久化。取消不修改设置，已下载的文件会保留；更换目录不会移动已有解析器。“设置 → 语言支持…”的 Tree-sitter 页提供相同选项。详见 [配置与存储说明](docs/configuration.md)。
 
 Tree-sitter 通过后台进程处理临时 UTF-8 快照，未保存的修改也能着色，不改动原文件。编辑后等待 250 ms 刷新，快速修改或关闭开关会取消旧请求；缺少工具、语言解析器或高亮规则，或调用超过 5 秒时使用基础着色。左下角常驻显示当前文档的 Tree-sitter 状态：绿色“正常”、蓝色“解析中”、黄色“异常”，以及“待命”或“已关闭”；悬停可查看具体原因，异常时点击状态可弹出异常信息和排查提示，支持选中文字复制。切换标签时同步切换，临时状态消息不会遮住提示。超过 2 MiB 的内容跳过 Tree-sitter，超长行沿用现有保护。
 

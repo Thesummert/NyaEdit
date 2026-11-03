@@ -20,6 +20,7 @@ add_subdirectory(src/core)
 add_library(nya_qt STATIC
     src/qt/AppStorage.cpp src/qt/AppStorage.h
     src/qt/TreeSitter.cpp src/qt/TreeSitter.h
+    src/qt/TreeSitterManager.cpp src/qt/TreeSitterManager.h
     src/qt/LspClient.cpp src/qt/LspClient.h
     src/qt/Encoding.cpp src/qt/Encoding.h
     src/qt/FileIO.cpp src/qt/FileIO.h

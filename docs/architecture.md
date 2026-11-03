@@ -38,6 +38,7 @@ flowchart LR
 
 - `AppStorage`：以 `QStandardPaths` 选择用户配置与数据目录，以 `QSettings` 保存编辑器偏好和预留系统配置，以 `QSaveFile` 原子保存文件 / 文件夹历史。支持注入路径供测试和其他前端使用，通过信号报告变更与错误；当前由 GUI 线程调用。详见 [存储接口](configuration.md)。
 - `TreeSitter`：通过异步 `QProcess` 调用系统 CLI 的 `highlight --html --css-classes`，读取用户配置中的语言解析器和查询。以 UTF-8 临时快照处理未保存内容，按后缀选择语言；HTML 捕获转换为 UTF-16 区间，验证解码后的文本与快照一致后再交给 UI。请求版本号防止旧结果覆盖新内容；取消及销毁时终止进程。运行限时 5 秒，输入上限 2 MiB，输出上限 32 MiB，不依赖 Tree-sitter 开发库。
+- `TreeSitterManager`：管理语言解析器目录和编辑器独立 `config.json`，保留原配置并合并 `parser-directories`。后台 Git 浅克隆官方语言仓库，补齐查询依赖，校验语言清单、生成的解析器和高亮查询后将临时目录重命名为安装目录。支持取消、超时和失败清理，不覆盖已有目录，不引入构建时网络依赖。
 
 - `LspClient`：通过异步 `QProcess` 的 stdio 与语言服务器通信，处理 JSON-RPC 分包、初始化与关闭、文档同步、超时及取消。保持上游 LSP 接口，属于 Qt 应用服务，不引入 core 的构建依赖。
 

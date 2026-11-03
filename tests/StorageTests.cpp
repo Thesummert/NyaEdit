@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QSettings>
 #include <QSignalSpy>
@@ -57,6 +58,29 @@ private slots:
         QVERIFY(!reloaded.value("appearance/dark").toBool());
         QCOMPARE(reloaded.value("window/geometry").toByteArray(), QByteArray::fromHex("0001feff"));
         QCOMPARE(reloaded.systemValue("future/option").toString(), QStringLiteral("中文配置"));
+    }
+    void independentTreeSitterConfigurationAndMigration()
+    {
+        QTemporaryDir dir; const auto paths = StoragePaths::underDirectory(dir.path());
+        QVERIFY(QDir().mkpath(paths.configDirectory));
+        {
+            QSettings old(paths.editorConfigFile(), QSettings::IniFormat);
+            old.setValue("language/treeSitterConfigPath", QString());
+        }
+        AppStorage storage(paths); QVERIFY2(storage.initialize(), qPrintable(storage.lastError()));
+        QCOMPARE(storage.value("language/treeSitterConfigPath").toString(), paths.treeSitterConfigFile());
+        QCOMPARE(storage.value("language/treeSitterParserDirectory").toString(), paths.treeSitterParserDirectory());
+        QFile config(paths.treeSitterConfigFile()); QVERIFY(config.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(config.readAll()).object().value("parser-directories").toArray(), QJsonArray{paths.treeSitterParserDirectory()});
+        config.close();
+        const auto custom = dir.filePath("external.json"); createFile(custom, "{\"theme\":{\"keyword\":56}}");
+        QVERIFY(storage.setValue("language/treeSitterConfigPath", custom));
+        QVERIFY(storage.setValue("language/treeSitterParserDirectory", dir.filePath("custom-parsers")));
+        AppStorage reloaded(paths); QVERIFY(reloaded.initialize());
+        QCOMPARE(reloaded.value("language/treeSitterConfigPath").toString(), custom);
+        QCOMPARE(reloaded.value("language/treeSitterParserDirectory").toString(), dir.filePath("custom-parsers"));
+        QFile external(custom); QVERIFY(external.open(QIODevice::ReadOnly));
+        QCOMPARE(external.readAll(), QByteArray("{\"theme\":{\"keyword\":56}}")); // Startup leaves explicit external configs alone.
     }
     void historyRoundTripAndPromotion()
     {

@@ -18,6 +18,12 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QKeySequenceEdit>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QFormLayout>
 #include <QDir>
 #include <QDockWidget>
 #include <QDragEnterEvent>
@@ -522,7 +528,93 @@ void MainWindow::setupMenus()
     run->addSeparator();
     run->addAction(m_taskDock->toggleViewAction()); updateTaskActions();
 
+    // Menu labels provide stable configuration keys for the commands exposed here.
+    QList<QAction *> shortcutActions;
+    const QVariantMap savedShortcuts = m_storage->value("shortcuts/bindings").toMap();
+    for (QMenu *menu : {file, edit, search, view, run}) {
+        for (QAction *action : menu->actions()) {
+            if (action->isSeparator() || action->menu() || action->shortcuts().isEmpty()) continue;
+            const QString key = menu->title() + QLatin1Char('/') + action->text();
+            action->setProperty("shortcutKey", key);
+            QStringList defaults;
+            for (const auto &sequence : action->shortcuts()) defaults << sequence.toString(QKeySequence::PortableText);
+            action->setProperty("defaultShortcuts", defaults);
+            if (savedShortcuts.contains(key)) {
+                QList<QKeySequence> sequences;
+                for (const auto &value : savedShortcuts.value(key).toStringList())
+                    if (!value.isEmpty()) sequences << QKeySequence::fromString(value, QKeySequence::PortableText);
+                action->setShortcuts(sequences);
+            }
+            shortcutActions << action;
+        }
+    }
     auto *settings = menuBar()->addMenu(QStringLiteral("设置(&T)"));
+    auto *shortcutSettings = settings->addAction(QStringLiteral("快捷键设置…"));
+    shortcutSettings->setObjectName("actionShortcutSettings");
+    connect(shortcutSettings, &QAction::triggered, this, [this, shortcutActions] {
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("快捷键设置"));
+        dialog.resize(560, 600);
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(QStringLiteral("点击输入框并按下组合键；清空输入框可禁用快捷键。"), &dialog));
+        auto *scroll = new QScrollArea(&dialog);
+        scroll->setWidgetResizable(true);
+        auto *contents = new QWidget(scroll);
+        auto *form = new QFormLayout(contents);
+        QList<QKeySequenceEdit *> editors;
+        bool restoringDefaults = false;
+        for (QAction *action : shortcutActions) {
+            auto *editor = new QKeySequenceEdit(action->shortcut(), contents);
+            editors << editor;
+            form->addRow(action->property("shortcutKey").toString(), editor);
+        }
+        scroll->setWidget(contents);
+        layout->addWidget(scroll);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, &dialog);
+        layout->addWidget(buttons);
+        connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, &dialog, [shortcutActions, editors, &restoringDefaults] {
+            restoringDefaults = true;
+            for (int i = 0; i < editors.size(); ++i) {
+                const auto defaults = shortcutActions[i]->property("defaultShortcuts").toStringList();
+                editors[i]->setKeySequence(defaults.isEmpty() ? QKeySequence() : QKeySequence::fromString(defaults.first(), QKeySequence::PortableText));
+            }
+        });
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            QList<QList<QKeySequence>> bindings;
+            for (int i = 0; i < editors.size(); ++i) {
+                const auto sequence = editors[i]->keySequence();
+                // Preserve secondary platform bindings when the primary key is unchanged.
+                auto sequences = shortcutActions[i]->shortcuts();
+                const auto defaults = shortcutActions[i]->property("defaultShortcuts").toStringList();
+                if (restoringDefaults && !defaults.isEmpty() && sequence == QKeySequence::fromString(defaults.first(), QKeySequence::PortableText)) {
+                    sequences.clear();
+                    for (const auto &value : defaults) sequences << QKeySequence::fromString(value, QKeySequence::PortableText);
+                } else if (sequence != shortcutActions[i]->shortcut()) {
+                    sequences = sequence.isEmpty() ? QList<QKeySequence>() : QList<QKeySequence>{sequence};
+                }
+                for (const auto &candidate : sequences) {
+                    for (const auto &existing : bindings) for (const auto &other : existing) {
+                        if (candidate.matches(other) != QKeySequence::NoMatch || other.matches(candidate) != QKeySequence::NoMatch) {
+                            QMessageBox::warning(&dialog, QStringLiteral("快捷键冲突"), QStringLiteral("快捷键 %1 与其他命令冲突，请重新设置。").arg(candidate.toString(QKeySequence::NativeText)));
+                            return;
+                        }
+                    }
+                }
+                bindings << sequences;
+            }
+            QVariantMap saved;
+            for (int i = 0; i < shortcutActions.size(); ++i) {
+                shortcutActions[i]->setShortcuts(bindings[i]);
+                QStringList values;
+                for (const auto &sequence : bindings[i]) values << sequence.toString(QKeySequence::PortableText);
+                saved.insert(shortcutActions[i]->property("shortcutKey").toString(), values);
+            }
+            m_storage->setValue("shortcuts/bindings", saved);
+            dialog.accept();
+        });
+        dialog.exec();
+    });
     auto *fontSettings = settings->addAction(QStringLiteral("字体与字号…"), this, &MainWindow::chooseEditorFont);
     fontSettings->setObjectName("actionFontSettings");
     auto *backgroundSettings = settings->addAction(QStringLiteral("全局背景…"), this, &MainWindow::chooseBackgroundSettings);

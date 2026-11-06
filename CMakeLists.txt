@@ -76,7 +76,9 @@ set_target_properties(NyaEdit PROPERTIES
 if(APPLE)
     set_source_files_properties(assets/logo.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     target_sources(NyaEdit PRIVATE assets/logo.icns)
-    set_target_properties(NyaEdit PROPERTIES MACOSX_BUNDLE_ICON_FILE logo.icns)
+    set_target_properties(NyaEdit PROPERTIES
+        MACOSX_BUNDLE_ICON_FILE logo.icns
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/Info.plist.in")
 elseif(WIN32)
     enable_language(RC)
     configure_file(packaging/nyaedit.rc.in ${CMAKE_CURRENT_BINARY_DIR}/nyaedit.rc @ONLY)

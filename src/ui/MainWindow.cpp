@@ -201,6 +201,7 @@ void MainWindow::updateBackgroundSurface()
         // Applying a stylesheet can restore Qt's cached inherited font.
         for (int i = 0; i < m_tabs->count(); ++i) qobject_cast<Editor *>(m_tabs->widget(i))->setDark(m_dark);
         m_taskPanel->refreshFont();
+        updateMarkdownPreview();
     }
     update();
 }
@@ -360,17 +361,14 @@ void MainWindow::setupMarkdownPreview()
     m_markdownDock = new QDockWidget(QStringLiteral("Markdown 预览"), this);
     m_markdownDock->setObjectName("markdownDock");
     m_markdownDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    m_markdownPreview = new QTextBrowser(m_markdownDock);
+    m_markdownPreview = new MarkdownPreview(m_markdownDock);
     m_markdownPreview->setObjectName("markdownPreview");
     m_markdownPreview->setMinimumWidth(220);
-    m_markdownPreview->setFrameShape(QFrame::NoFrame);
-    m_markdownPreview->document()->setDocumentMargin(20);
-    m_markdownPreview->setOpenLinks(false);
-    connect(m_markdownPreview, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
-        if (url.isRelative() && url.path().isEmpty() && url.hasFragment())
-            m_markdownPreview->scrollToAnchor(url.fragment());
-        else if (url.scheme() == "http" || url.scheme() == "https" || url.scheme() == "mailto")
-            QDesktopServices::openUrl(url);
+    m_markdownPreview->setPreviewFont(configuredEditorFont());
+    m_markdownPreview->setBackground(m_background, this);
+    connect(m_markdownPreview, &MarkdownPreview::localLinkClicked, this, &MainWindow::openMarkdownLink);
+    connect(m_markdownPreview, &MarkdownPreview::zoomRequested, this, [this](int steps) {
+        if (auto *editor = current()) editor->setFontSize(editor->fontSize() + steps);
     });
     m_markdownDock->setWidget(m_markdownPreview);
     addDockWidget(Qt::RightDockWidgetArea, m_markdownDock);
@@ -387,7 +385,16 @@ void MainWindow::setupMarkdownPreview()
 void MainWindow::updateMarkdownPreview()
 {
     auto *editor = current();
-    QList<QTextBrowser *> previews;
+    QString anchor;
+    const bool navigating = editor && editor == m_markdownNavigationTarget && !editor->loading;
+    if (navigating) {
+        anchor = m_markdownNavigationAnchor;
+        m_markdownNavigationTarget.clear();
+        editor->setMarkdownPreviewVisible(true);
+        m_markdownRevision = -2;
+    }
+    m_markdownPreview->setPreviewFont(editor ? editor->editorFont() : configuredEditorFont());
+    QList<MarkdownPreview *> previews;
     if (m_markdownDock->isVisible()) previews.append(m_markdownPreview);
     if (editor && editor->isMarkdownPreviewVisible()) previews.append(editor->markdownPreview());
     if (previews.isEmpty()) return;
@@ -408,9 +415,31 @@ void MainWindow::updateMarkdownPreview()
         else if (loading) preview->setPlainText(QStringLiteral("正在读取文件…"));
         else if (editor->document()->characterCount() > 2 * 1024 * 1024)
             preview->setPlainText(QStringLiteral("文档过大，已暂停 Markdown 预览（上限约 200 万字符）。"));
-        else preview->document()->setMarkdown(editor->toPlainText(),
-            QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) | QTextDocument::MarkdownNoHTML);
-        preview->verticalScrollBar()->setValue(scroll);
+        else preview->renderMarkdown(editor->toPlainText(), path);
+        if (navigating && !anchor.isEmpty()) preview->scrollToAnchor(anchor);
+        else preview->verticalScrollBar()->setValue(navigating ? 0 : scroll);
+    }
+}
+
+void MainWindow::openMarkdownLink(const QUrl &url)
+{
+    const QFileInfo info(url.toLocalFile());
+    if (!info.exists()) {
+        statusBar()->showMessage(QStringLiteral("链接目标不存在：%1").arg(info.filePath()), 6000); return;
+    }
+    const QString suffix = info.suffix().toLower();
+    if (info.isFile() && (suffix == "md" || suffix == "markdown" || suffix == "txt")) {
+        openPath(info.absoluteFilePath());
+        auto *editor = current();
+        if (!editor || editor->path != canonicalPath(info.absoluteFilePath())) return;
+        if (suffix != "txt") {
+            m_markdownNavigationTarget = editor;
+            m_markdownNavigationAnchor = url.fragment(QUrl::FullyDecoded);
+            m_markdownRevision = -2;
+            updateMarkdownPreview();
+        }
+    } else if (!QDesktopServices::openUrl(url)) {
+        statusBar()->showMessage(QStringLiteral("无法打开链接：%1").arg(url.toDisplayString()), 6000);
     }
 }
 
@@ -915,6 +944,7 @@ Editor *MainWindow::addEditor(const QString &name)
         m_markdownRevision = -2;
         updateMarkdownPreview(); updateStatus();
     });
+    connect(editor, &Editor::markdownLinkClicked, this, &MainWindow::openMarkdownLink);
     m_lsp->addEditor(editor);
     connect(editor, &Editor::languageStatusChanged, this, [this, editor](const QString &) {
         if (editor == current()) updateTreeSitterStatus();
@@ -928,7 +958,7 @@ Editor *MainWindow::addEditor(const QString &name)
     connect(editor, &QPlainTextEdit::undoAvailable, this, [this] { updateStatus(); });
     connect(editor, &QPlainTextEdit::redoAvailable, this, [this] { updateStatus(); });
     connect(editor, &Editor::editorFontChanged, this, [this, editor] {
-        storeEditorFont(editor->editorFont()); updateStatus();
+        storeEditorFont(editor->editorFont()); updateMarkdownPreview(); updateStatus();
     });
     connect(editor, &QPlainTextEdit::textChanged, this, [this, editor] {
         if (editor == current() && m_searchTransition->isExpanded()) m_searchTimer->start();
@@ -1008,6 +1038,7 @@ void MainWindow::openPath(const QString &path, const QString &forcedEncoding)
             const int index = m_tabs->indexOf(pristine); if (index >= 0) { m_lsp->removeEditor(pristine); m_tabs->removeTab(index); pristine->deleteLater(); }
         }
         refreshDocumentList(); updateStatus();
+        if (m_markdownNavigationTarget == editor) updateMarkdownPreview();
         applyDefinitionPosition(editor);
         if (current() == editor) refreshSearch();
         if (result.encoding.confidence < 50) statusBar()->showMessage(QStringLiteral("编码判断置信度较低，请核对文字；可点击右下角编码重新打开。"), 12000);
@@ -1371,6 +1402,7 @@ void MainWindow::setDark(bool dark)
     m_dark = dark; Theme::apply(*qApp, dark); m_storage->setValue("appearance/dark", dark);
     for (int i = 0; i < m_tabs->count(); ++i) qobject_cast<Editor *>(m_tabs->widget(i))->setDark(dark);
     m_taskPanel->refreshFont();
+    updateMarkdownPreview();
 }
 
 QFont MainWindow::configuredEditorFont() const
@@ -1397,7 +1429,7 @@ void MainWindow::chooseEditorFont()
         auto *editor = qobject_cast<Editor *>(m_tabs->widget(i));
         QSignalBlocker blocker(editor); editor->setEditorFont(font);
     }
-    updateStatus();
+    updateMarkdownPreview(); updateStatus();
 }
 
 void MainWindow::chooseLanguageSettings()

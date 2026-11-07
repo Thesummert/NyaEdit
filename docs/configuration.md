@@ -117,6 +117,8 @@ storage.setSystemValue("updates/enabled", true);
 
 `StoragePaths::standard()` 返回运行平台路径；`StoragePaths::underDirectory(root)` 返回 `root/config` 与 `root/data`，可注入 `AppStorage` 或 `MainWindow`，便于独立测试和嵌入其他前端。
 
+Markdown 的编辑区预览与右侧预览共用 `editor/fontFamily`、`editor/fontSize` 和 `background/path`、`background/opacity`、`background/blur`，无需单独配置。字体设置应用于所有文档；视图菜单或 Ctrl+滚轮调整当前文档及其预览的字号，并保存为新文档的默认字号。两种预览均支持本地相对图片与文件链接，已保存文件所在目录作为解析基准。
+
 ## 历史记录
 
 ```json

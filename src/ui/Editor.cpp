@@ -3,7 +3,6 @@
 #include "Highlighter.h"
 #include <QFontDatabase>
 #include <QApplication>
-#include <QDesktopServices>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QListWidget>
@@ -114,18 +113,12 @@ void Editor::setMarkdownPreviewVisible(bool visible)
     if (visible == isMarkdownPreviewVisible()) return;
     if (visible && !m_markdownPreview) {
         // Cover the source widget without replacing its document or undo history.
-        m_markdownPreview = new QTextBrowser(this);
+        m_markdownPreview = new MarkdownPreview(this);
         m_markdownPreview->setObjectName("inlineMarkdownPreview");
-        m_markdownPreview->setFont(qApp->font());
-        m_markdownPreview->setFrameShape(QFrame::NoFrame);
-        m_markdownPreview->document()->setDocumentMargin(20);
-        m_markdownPreview->setOpenLinks(false);
-        connect(m_markdownPreview, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
-            if (url.isRelative() && url.path().isEmpty() && url.hasFragment())
-                m_markdownPreview->scrollToAnchor(url.fragment());
-            else if (url.scheme() == "http" || url.scheme() == "https" || url.scheme() == "mailto")
-                QDesktopServices::openUrl(url);
-        });
+        m_markdownPreview->setPreviewFont(m_editorFont);
+        m_markdownPreview->setBackground(m_background, m_backgroundSurface);
+        connect(m_markdownPreview, &MarkdownPreview::localLinkClicked, this, &Editor::markdownLinkClicked);
+        connect(m_markdownPreview, &MarkdownPreview::zoomRequested, this, [this](int steps) { setFontSize(fontSize() + steps); });
     }
     setReadOnly(visible || loading);
     hideCompletions();
@@ -145,6 +138,7 @@ void Editor::setDark(bool dark)
     m_dark = dark;
     // Reapplying an application stylesheet can restore a cached widget font.
     setFont(m_editorFont);
+    if (m_markdownPreview) m_markdownPreview->setPreviewFont(m_editorFont);
     setTabStopDistance(QFontMetricsF(this->font(), viewport()).horizontalAdvance(' ') * 4);
     updateGutterWidth();
     m_highlighter->setDark(dark); m_gutter->update(); updateHighlights();
@@ -158,6 +152,7 @@ void Editor::setBackground(EditorBackground *background, QWidget *surface)
     if (m_background) disconnect(m_background, nullptr, this, nullptr);
     m_background = background;
     m_backgroundSurface = surface;
+    if (m_markdownPreview) m_markdownPreview->setBackground(background, surface);
     const auto refresh = [this] { updateHighlights(); viewport()->update(); m_gutter->update(); };
     if (background) connect(background, &EditorBackground::changed, this, refresh);
     refresh();
@@ -177,6 +172,7 @@ void Editor::setEditorFont(const QFont &font)
     if (m_editorFont == normalized) return;
     const bool sizeChanged = normalized.pointSize() != fontSize();
     m_editorFont = normalized; setFont(m_editorFont);
+    if (m_markdownPreview) m_markdownPreview->setPreviewFont(m_editorFont);
     setTabStopDistance(QFontMetricsF(this->font(), viewport()).horizontalAdvance(' ') * 4);
     updateGutterWidth(); m_gutter->update(); viewport()->update();
     updateAnimatedCursor(false);

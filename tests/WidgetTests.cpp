@@ -17,6 +17,7 @@
 #include <QContextMenuEvent>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
+#include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QFile>
@@ -73,10 +74,34 @@ protected:
     void openInTerminal(const QString &directory) override { terminalDirectories.append(directory); }
 };
 
+class MarkdownUrlRecorder : public QObject {
+    Q_OBJECT
+public:
+    QList<QUrl> urls;
+    MarkdownUrlRecorder() {
+        for (const auto &scheme : {"https", "mailto", "file"}) QDesktopServices::setUrlHandler(scheme, this, "record");
+    }
+    ~MarkdownUrlRecorder() override {
+        for (const auto &scheme : {"https", "mailto", "file"}) QDesktopServices::unsetUrlHandler(scheme);
+    }
+public slots:
+    void record(const QUrl &url) { urls.append(url); }
+};
+
 class WidgetTests : public QObject {
     Q_OBJECT
     QTemporaryDir m_settings;
     StoragePaths testPaths() const { return StoragePaths::underDirectory(m_settings.filePath(QString::fromLatin1(QTest::currentTestFunction()))); }
+    static bool clickMarkdownLink(QTextBrowser *preview, const QString &label)
+    {
+        auto cursor = preview->document()->find(label);
+        if (cursor.isNull()) return false;
+        cursor.setPosition(cursor.selectionStart() + 1);
+        const QPoint point = preview->cursorRect(cursor).center();
+        if (preview->anchorAt(point).isEmpty()) return false;
+        QTest::mouseClick(preview->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        return true;
+    }
     static QJsonObject fixtureTask(const QString &label, const QString &mode, const QStringList &args = {})
     {
         QString program = QCoreApplication::applicationDirPath() + "/nya_task_tests";
@@ -427,6 +452,130 @@ private slots:
         QVERIFY(!toggle->isVisible()); QVERIFY(!toggle->isChecked());
         editor->setLanguage("markdown");
         QVERIFY(toggle->isVisible()); QVERIFY(!toggle->isChecked());
+        window.close();
+    }
+
+    void markdownPreviewAppearanceFollowsSettings()
+    {
+        QTemporaryDir files;
+        QImage image(16, 16, QImage::Format_RGB32); image.fill(QColor("#c82842"));
+        const QString picture = files.filePath("background.png"); QVERIFY(image.save(picture));
+        MainWindow window(nullptr, testPaths()); window.newDocument(); window.show();
+        auto *editor = qobject_cast<Editor *>(window.findChild<QTabWidget *>()->currentWidget());
+        const QString source = QStringLiteral("# 标题\n\n**粗体** 与正文\n\n") + QString("paragraph\n\n").repeated(100);
+        editor->setPlainText(source); editor->document()->setModified(false); editor->setLanguage("md");
+        editor->setMarkdownPreviewVisible(true);
+        window.findChild<QAction *>("actionMarkdownPreview")->trigger();
+        auto *inlinePreview = editor->markdownPreview();
+        auto *dockPreview = window.findChild<MarkdownPreview *>("markdownPreview");
+        QString family = Editor::defaultEditorFont().family();
+        for (const auto &candidate : QFontDatabase().families()) {
+            if (!candidate.startsWith('.') && candidate != family) { family = candidate; break; }
+        }
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<FontSettingsDialog *>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            dialog->findChild<QFontComboBox *>("editorFontFamily")->setCurrentFont(QFont(family));
+            dialog->findChild<QSpinBox *>("editorFontSize")->setValue(24);
+            dialog->accept();
+        });
+        window.findChild<QAction *>("actionFontSettings")->trigger();
+        for (auto *preview : {inlinePreview, dockPreview}) {
+            QCOMPARE(preview->document()->defaultFont().family(), family);
+            QCOMPARE(preview->document()->defaultFont().pointSize(), 24);
+            QCOMPARE(preview->toPlainText(), inlinePreview->toPlainText());
+            QCOMPARE(preview->document()->firstBlock().blockFormat().headingLevel(), 1);
+        }
+        for (auto *preview : {inlinePreview, dockPreview}) {
+            const int previous = editor->fontSize();
+            const QPointF point(50, 50);
+            QWheelEvent wheel(point, preview->viewport()->mapToGlobal(point.toPoint()), QPoint(), QPoint(0, 120),
+                Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(preview->viewport(), &wheel);
+            QCOMPARE(editor->fontSize(), previous + 1);
+            QCOMPARE(inlinePreview->document()->defaultFont().pointSize(), previous + 1);
+            QCOMPARE(dockPreview->document()->defaultFont().pointSize(), previous + 1);
+        }
+        auto *background = window.findChild<EditorBackground *>(); QVERIFY(background);
+        QVERIFY(background->setSettings({picture, 50, 0}));
+        for (bool dark : {false, true}) {
+            if (window.findChild<AppStorage *>()->value("appearance/dark").toBool() != dark)
+                window.findChild<QAction *>("actionTheme")->trigger();
+            for (auto *preview : {inlinePreview, dockPreview}) {
+                QCOMPARE(preview->font().pointSize(), 26);
+                QCOMPARE(preview->document()->defaultFont().family(), family);
+                const auto sample = [preview] {
+                    const auto pixels = preview->viewport()->grab().toImage();
+                    return pixels.pixelColor(pixels.width() - 4, pixels.height() - 4);
+                };
+                const QColor base = preview->palette().color(QPalette::Base);
+                QColor expected((base.red() + 200) / 2, (base.green() + 40) / 2, (base.blue() + 66) / 2);
+                const auto closeColor = [expected](QColor color) {
+                    return qAbs(color.red() - expected.red()) <= 2 && qAbs(color.green() - expected.green()) <= 2
+                        && qAbs(color.blue() - expected.blue()) <= 2;
+                };
+                QVERIFY(closeColor(sample()));
+                preview->verticalScrollBar()->setValue(preview->verticalScrollBar()->maximum() / 2);
+                QVERIFY(closeColor(sample()));
+            }
+        }
+        QVERIFY(background->setSettings({}));
+        for (auto *preview : {inlinePreview, dockPreview}) {
+            const auto pixels = preview->viewport()->grab().toImage();
+            QCOMPARE(pixels.pixelColor(pixels.width() - 4, pixels.height() - 4), preview->palette().color(QPalette::Base));
+        }
+        QCOMPARE(editor->contents(), source); QVERIFY(!editor->dirty());
+        window.close();
+    }
+
+    void markdownLinksNavigateToHeadingsFilesAndExternalUrls()
+    {
+        QTemporaryDir files;
+        const QString padding = QString("paragraph\n\n").repeated(70);
+        QFile first(files.filePath("first.md")); QVERIFY(first.open(QIODevice::WriteOnly));
+        first.write(QString("[next](second%20file.md#章节-1)\n\n[web](https://example.com/path?q=1#part)\n\n"
+            "[mail](mailto:hello@example.com)\n\n[image](image.png)\n\n[missing](missing.md)\n\n[local](#章节-1)\n\n"
+            "# 章节\n\n%1# 章节\n\n%1").arg(padding).toUtf8()); first.close();
+        QFile second(files.filePath("second file.md")); QVERIFY(second.open(QIODevice::WriteOnly));
+        second.write(QString("# 章节\n\n%1# 章节\n\n%1").arg(padding).toUtf8()); second.close();
+        QImage image(8, 8, QImage::Format_RGB32); image.fill(Qt::red); QVERIFY(image.save(files.filePath("image.png")));
+        MarkdownUrlRecorder recorder;
+        MainWindow window(nullptr, testPaths()); window.show(); window.openPath(first.fileName());
+        auto *tabs = window.findChild<QTabWidget *>();
+        QTRY_VERIFY(tabs->count() == 1 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        auto *source = qobject_cast<Editor *>(tabs->currentWidget()); source->setMarkdownPreviewVisible(true);
+        window.findChild<QAction *>("actionMarkdownPreview")->trigger();
+        auto *dock = window.findChild<MarkdownPreview *>("markdownPreview");
+        for (auto *preview : {source->markdownPreview(), dock}) {
+            QVERIFY(clickMarkdownLink(preview, "web"));
+            QCOMPARE(recorder.urls.takeLast(), QUrl("https://example.com/path?q=1#part"));
+            QVERIFY(clickMarkdownLink(preview, "mail"));
+            QCOMPARE(recorder.urls.takeLast(), QUrl("mailto:hello@example.com"));
+            QVERIFY(clickMarkdownLink(preview, "image"));
+            QCOMPARE(recorder.urls.takeLast(), QUrl::fromLocalFile(files.filePath("image.png")));
+            QVERIFY(clickMarkdownLink(preview, "missing"));
+            QCOMPARE(tabs->count(), 1); QVERIFY(window.statusBar()->currentMessage().contains("missing.md"));
+            QVERIFY(clickMarkdownLink(preview, "local"));
+            QVERIFY(preview->verticalScrollBar()->value() > 200);
+            const int duplicateScroll = preview->verticalScrollBar()->value();
+            preview->scrollToAnchor(QStringLiteral("章节"));
+            QVERIFY(preview->verticalScrollBar()->value() < duplicateScroll);
+            preview->verticalScrollBar()->setValue(0);
+        }
+        QVERIFY(clickMarkdownLink(source->markdownPreview(), "next"));
+        QTRY_VERIFY(tabs->count() == 2 && !qobject_cast<Editor *>(tabs->currentWidget())->loading);
+        auto *target = qobject_cast<Editor *>(tabs->currentWidget());
+        QTRY_VERIFY(target->isMarkdownPreviewVisible());
+        QCOMPARE(target->path, QFileInfo(second.fileName()).canonicalFilePath());
+        QTRY_VERIFY(target->markdownPreview()->verticalScrollBar()->value() > 200);
+        QVERIFY(dock->verticalScrollBar()->value() > 200);
+        QVERIFY(!source->dirty()); QVERIFY(!target->dirty());
+        tabs->setCurrentWidget(source);
+        QTRY_COMPARE(dock->toPlainText(), source->markdownPreview()->toPlainText());
+        dock->verticalScrollBar()->setValue(0);
+        QVERIFY(clickMarkdownLink(dock, "next"));
+        QCOMPARE(tabs->currentWidget(), target); QCOMPARE(tabs->count(), 2);
+        QVERIFY(target->markdownPreview()->verticalScrollBar()->value() > 200);
         window.close();
     }
 

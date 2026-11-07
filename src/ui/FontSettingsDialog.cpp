@@ -15,7 +15,7 @@ FontSettingsDialog::FontSettingsDialog(const QFont &font, QWidget *parent) : QDi
     setObjectName("fontSettingsDialog"); setWindowTitle(QStringLiteral("字体与字号"));
     resize(560, 390); setMinimumSize(400, 320);
     auto *layout = new QVBoxLayout(this); layout->setContentsMargins(24, 24, 24, 20); layout->setSpacing(16);
-    auto *description = new QLabel(QStringLiteral("选择编辑区字体，确认后应用于所有文档。"));
+    auto *description = new QLabel(QStringLiteral("选择字体和字号，确认后应用于所有文档及 Markdown 预览。"));
     description->setWordWrap(true); layout->addWidget(description);
     auto *form = new QFormLayout; form->setSpacing(12);
     m_family = new QFontComboBox; m_family->setObjectName("editorFontFamily");

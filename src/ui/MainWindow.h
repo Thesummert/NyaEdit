@@ -34,6 +34,7 @@ class Editor;
 class EditorBackground;
 class EditorLsp;
 class FileTreeView;
+class MarkdownPreview;
 class TaskPanel;
 class TaskRunner;
 class WelcomePage;
@@ -61,6 +62,7 @@ private:
     void setupStatus();
     void setupMarkdownPreview();
     void updateMarkdownPreview();
+    void openMarkdownLink(const QUrl &url);
     void setupTasks();
     void chooseTask();
     void runTask(const QString &label);
@@ -130,12 +132,14 @@ private:
 
     QTabWidget *m_tabs = nullptr;
     QDockWidget *m_markdownDock = nullptr;
-    QTextBrowser *m_markdownPreview = nullptr;
+    MarkdownPreview *m_markdownPreview = nullptr;
     QTimer *m_markdownTimer = nullptr;
     QPointer<Editor> m_markdownEditor;
     QString m_markdownPath;
     int m_markdownRevision = -2;
     bool m_markdownLoading = false;
+    QPointer<Editor> m_markdownNavigationTarget;
+    QString m_markdownNavigationAnchor;
     QStackedWidget *m_pages = nullptr;
     WelcomePage *m_welcome = nullptr;
     AppStorage *m_storage = nullptr;

@@ -3,6 +3,7 @@
 #include "Search.h"
 #include "Animation.h"
 #include "TreeSitter.h"
+#include "MarkdownPreview.h"
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QJsonValue>
@@ -35,7 +36,7 @@ public:
     bool isMarkdown() const { return m_markdown; }
     void setMarkdownPreviewVisible(bool visible);
     bool isMarkdownPreviewVisible() const;
-    QTextBrowser *markdownPreview() const { return m_markdownPreview; }
+    MarkdownPreview *markdownPreview() const { return m_markdownPreview; }
     void setLanguageSettings(const LanguageSettings &settings);
     LanguageSettings languageSettings() const;
     TreeSitterStatus treeSitterStatus() const;
@@ -61,6 +62,7 @@ public:
     void hideCompletions();
     int lspOffset(const QJsonObject &position) const;
 signals:
+    void markdownLinkClicked(const QUrl &url);
     void markdownStateChanged();
     void languageStatusChanged(const QString &status);
     void zoomChanged();
@@ -96,7 +98,7 @@ private:
     Gutter *m_gutter;
     Highlighter *m_highlighter;
     bool m_markdown = false;
-    QTextBrowser *m_markdownPreview = nullptr;
+    MarkdownPreview *m_markdownPreview = nullptr;
     QPointer<EditorBackground> m_background;
     QPointer<QWidget> m_backgroundSurface;
     QVector<SearchMatch> m_matches;

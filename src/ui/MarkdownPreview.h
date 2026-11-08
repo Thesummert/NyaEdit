@@ -9,6 +9,7 @@ class MarkdownPreview : public QTextBrowser {
 public:
     explicit MarkdownPreview(QWidget *parent = nullptr);
     void setPreviewFont(const QFont &font);
+    void setPlainText(const QString &text) { m_hasMarkdown = false; QTextBrowser::setPlainText(text); }
     void setBackground(EditorBackground *background, QWidget *surface = nullptr);
     void renderMarkdown(const QString &source, const QString &path);
 signals:
@@ -23,5 +24,7 @@ private:
     QPointer<EditorBackground> m_background;
     QPointer<QWidget> m_backgroundSurface;
     QString m_path;
+    QString m_source;
+    bool m_hasMarkdown = false;
 };
 }

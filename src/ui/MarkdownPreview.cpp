@@ -1,5 +1,6 @@
 #include "MarkdownPreview.h"
 #include "EditorBackground.h"
+#include "MarkdownMath.h"
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
@@ -9,6 +10,7 @@
 #include <QSet>
 #include <QScrollBar>
 #include <QTextBlock>
+#include <QTextImageFormat>
 #include <QWheelEvent>
 
 namespace nya {
@@ -23,8 +25,10 @@ MarkdownPreview::MarkdownPreview(QWidget *parent) : QTextBrowser(parent)
 
 void MarkdownPreview::setPreviewFont(const QFont &font)
 {
+    const bool changed = document()->defaultFont() != font;
     setFont(font);
     document()->setDefaultFont(font);
+    if (changed && m_hasMarkdown) renderMarkdown(m_source, m_path);
 }
 
 void MarkdownPreview::setBackground(EditorBackground *background, QWidget *surface)
@@ -38,11 +42,38 @@ void MarkdownPreview::setBackground(EditorBackground *background, QWidget *surfa
 
 void MarkdownPreview::renderMarkdown(const QString &source, const QString &path)
 {
+    m_source = source;
+    m_hasMarkdown = true;
     m_path = path;
     document()->setBaseUrl(path.isEmpty() ? QUrl()
         : QUrl::fromLocalFile(QFileInfo(path).absolutePath() + QDir::separator()));
-    document()->setMarkdown(source, QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub)
+    QList<MathExpression> expressions;
+    const QString markdown = extractMarkdownMath(source, expressions);
+    document()->setMarkdown(markdown, QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub)
         | QTextDocument::MarkdownNoHTML);
+    if (!expressions.isEmpty()) resetMarkdownMath();
+    for (const auto &expression : expressions) {
+        QTextCursor cursor = document()->find(expression.token);
+        if (cursor.isNull()) continue;
+        const QImage image = renderMarkdownMath(expression.source, document()->defaultFont(), palette().color(QPalette::Text), expression.display);
+        if (image.isNull()) {
+            cursor.insertText(expression.original);
+            continue;
+        }
+        const QUrl url(QStringLiteral("nya-math:") + expression.token);
+        document()->addResource(QTextDocument::ImageResource, url, image);
+        QTextImageFormat format;
+        format.setName(url.toString());
+        format.setWidth(image.width() / image.devicePixelRatio());
+        format.setHeight(image.height() / image.devicePixelRatio());
+        format.setToolTip(expression.source);
+        cursor.insertImage(format);
+        if (expression.display && cursor.block().text().trimmed() == QString(QChar::ObjectReplacementCharacter)) {
+            auto blockFormat = cursor.blockFormat();
+            blockFormat.setAlignment(Qt::AlignHCenter);
+            cursor.setBlockFormat(blockFormat);
+        }
+    }
     // Qt renders headings without the fragment targets used by Markdown tables of contents.
     QSet<QString> anchors;
     QHash<QString, int> suffixes;

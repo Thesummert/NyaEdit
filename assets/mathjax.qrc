@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/mathjax">
+    <file alias="tex-svg.js">mathjax/tex-svg.js</file>
+  </qresource>
+</RCC>

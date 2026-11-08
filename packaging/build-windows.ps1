@@ -25,6 +25,10 @@ if (!(Test-Path $exe)) { throw 'NyaEdit.exe not found.' }
 $stage = Join-Path $build ('package-stage-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item $exe $stage
+$licenses = Join-Path $stage 'licenses/mathjax'
+New-Item -ItemType Directory -Path $licenses -Force | Out-Null
+Copy-Item (Join-Path $root 'assets/mathjax/LICENSE') $licenses
+Copy-Item (Join-Path $root 'assets/mathjax/LICENSE-mhchemparser') $licenses
 $icuFiles = @(Get-ChildItem -Path $icu -Filter 'icu*.dll' -File)
 if ($icuFiles.Count -eq 0) { throw 'ICU DLLs not found.' }
 $icuFiles | Copy-Item -Destination $stage

@@ -1,6 +1,6 @@
 # 前后端边界
 
-NyaEdit 采用进程内的原生分层架构。前端为 Qt Widgets，后端为独立 C++ 库，无 HTTP 服务、浏览器或 JavaScript 桥接。
+NyaEdit 采用进程内的原生分层架构。前端为 Qt Widgets，后端为独立 C++ 库，无 HTTP 服务或浏览器运行时。Markdown 数学公式由内嵌的 MathJax 在 Qt JavaScript 引擎中离线排版，生成 SVG 后交给 Qt 绘制。
 
 ```mermaid
 flowchart LR

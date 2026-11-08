@@ -6,6 +6,7 @@
 #include "Theme.h"
 #include "FileTreeView.h"
 #include "MainWindow.h"
+#include "MarkdownMath.h"
 #include "WelcomePage.h"
 #include "TaskConfiguration.h"
 #include "TaskPanel.h"
@@ -177,6 +178,47 @@ class WidgetTests : public QObject {
         return result;
     }
 private slots:
+    void markdownMathRendersAndPreservesCode()
+    {
+        MarkdownPreview preview;
+        const QString source = QStringLiteral("Text $x^2$ and `$a$`\n\n$$\\frac{a}{b}$$\n\n```\n$x$\n```\n\n    $indented$\n\nEscaped \\$5 and unmatched $x");
+        preview.renderMarkdown(source, QString());
+        const QString text = preview.toPlainText();
+        QCOMPARE(text.count(QChar::ObjectReplacementCharacter), 2);
+        QVERIFY(text.contains(QStringLiteral("$a$")));
+        QVERIFY(text.contains(QStringLiteral("$x$")));
+        QVERIFY(text.contains(QStringLiteral("$indented$")));
+        QVERIFY(text.contains(QStringLiteral("$5")));
+        QVERIFY(text.contains(QStringLiteral("unmatched $x")));
+        QList<MathExpression> expressions;
+        extractMarkdownMath(source, expressions);
+        QCOMPARE(expressions.size(), 2);
+        QCOMPARE(expressions[1].source, QStringLiteral("\\frac{a}{b}"));
+        QVERIFY(!renderMarkdownMath(expressions[1].source, preview.font(), Qt::black).isNull());
+    }
+    void markdownMathSupportsMatricesMacrosAndErrors()
+    {
+        MarkdownPreview preview;
+        const QString source = QStringLiteral("$\\newcommand{\\R}{\\mathbb{R}}\\R$\n\n"
+            "$$\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}$$\n\n"
+            "\\(\\R^2\\)\n\n\\[\\begin{aligned}a&=b\\\\c&=d\\end{aligned}\\]\n\n"
+            "$\\notarealcommand{x}$");
+        preview.renderMarkdown(source, QString());
+        const QString text = preview.toPlainText();
+        QCOMPARE(text.count(QChar::ObjectReplacementCharacter), 4);
+        QVERIFY(text.contains(QStringLiteral("$\\notarealcommand{x}$")));
+        MarkdownPreview other;
+        other.renderMarkdown(QStringLiteral("$\\R$"), QString());
+        QVERIFY(other.toPlainText().contains(QStringLiteral("$\\R$")));
+        resetMarkdownMath();
+        const QImage matrix = renderMarkdownMath(QStringLiteral("\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}"), preview.font(), Qt::black, true);
+        QVERIFY(!matrix.isNull());
+        int painted = 0;
+        for (int y = 0; y < matrix.height(); ++y)
+            for (int x = 0; x < matrix.width(); ++x)
+                if (qAlpha(matrix.pixel(x, y))) ++painted;
+        QVERIFY(painted > 30);
+    }
     void shiftDeleteConfirmsAndProtectsUnsavedDocuments()
     {
         QTemporaryDir files; QString error;

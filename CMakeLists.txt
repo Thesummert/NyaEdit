@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Concurrent)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Concurrent Svg)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Concurrent Svg Qml)
 
 include(CTest)
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/core/CMakeLists.txt")
@@ -46,6 +46,7 @@ endif()
 
 add_library(nya_widgets STATIC
     assets/icons.qrc
+    assets/mathjax.qrc
     src/ui/Animation.cpp src/ui/Animation.h
     src/ui/AnimationSettingsDialog.cpp src/ui/AnimationSettingsDialog.h
     src/ui/BackgroundSettingsDialog.cpp src/ui/BackgroundSettingsDialog.h
@@ -58,13 +59,14 @@ add_library(nya_widgets STATIC
     src/ui/Highlighter.cpp src/ui/Highlighter.h
     src/ui/LanguageSettingsDialog.cpp src/ui/LanguageSettingsDialog.h
     src/ui/MarkdownPreview.cpp src/ui/MarkdownPreview.h
+    src/ui/MarkdownMath.cpp src/ui/MarkdownMath.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/MainWindowFiles.cpp
     src/ui/TaskPanel.cpp src/ui/TaskPanel.h
     src/ui/WelcomePage.cpp src/ui/WelcomePage.h
     src/ui/Theme.cpp src/ui/Theme.h)
 target_include_directories(nya_widgets PUBLIC src/ui)
-target_link_libraries(nya_widgets PUBLIC nya_qt nya_tasks Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg)
+target_link_libraries(nya_widgets PUBLIC nya_qt nya_tasks Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg Qt${QT_VERSION_MAJOR}::Qml)
 
 add_executable(NyaEdit MACOSX_BUNDLE WIN32 src/main.cpp)
 target_link_libraries(NyaEdit PRIVATE nya_widgets)
@@ -77,6 +79,8 @@ set_target_properties(NyaEdit PROPERTIES
 if(APPLE)
     set_source_files_properties(assets/logo.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     target_sources(NyaEdit PRIVATE assets/logo.icns)
+    set_source_files_properties(assets/mathjax/LICENSE assets/mathjax/LICENSE-mhchemparser PROPERTIES MACOSX_PACKAGE_LOCATION Resources/mathjax)
+    target_sources(NyaEdit PRIVATE assets/mathjax/LICENSE assets/mathjax/LICENSE-mhchemparser)
     set_target_properties(NyaEdit PROPERTIES
         MACOSX_BUNDLE_ICON_FILE logo.icns
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/Info.plist.in")
@@ -161,6 +165,7 @@ endif()
 
 include(GNUInstallDirs)
 install(TARGETS NyaEdit BUNDLE DESTINATION . RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES assets/mathjax/LICENSE assets/mathjax/LICENSE-mhchemparser DESTINATION ${CMAKE_INSTALL_DATADIR}/nyaedit/licenses/mathjax)
 if(UNIX AND NOT APPLE)
     install(FILES packaging/nyaedit.desktop DESTINATION share/applications)
     install(FILES assets/logo.svg DESTINATION share/icons/hicolor/scalable/apps RENAME nyaedit.svg)
